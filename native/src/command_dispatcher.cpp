@@ -153,6 +153,7 @@ static bool IsMutatingNativeHandler(const std::string& cmd_type) {
         "native:invoke_interface",
         "native:run_macroscript",
         "native:scene_patch",
+        "native:plugin_patch",
         "native:scene_qa_fix",
     };
     return kMutating.count(cmd_type) > 0;
@@ -457,6 +458,12 @@ std::string CommandDispatcher::Dispatch(
 
         if (cmd_type == "ping") {
             result = HandlePing(gup);
+        } else if (cmd_type == "native:plugin_inspect") {
+            result = NativeHandlers::PluginInspect(command, gup);
+        } else if (cmd_type == "native:plugin_patch") {
+            result = NativeHandlers::PluginPatch(command, gup);
+        } else if (cmd_type == "native:lighting_context") {
+            result = NativeHandlers::LightingContext(command, gup);
         } else if (cmd_type == "maxscript") {
             if (command.empty()) {
                 throw std::runtime_error("Empty MAXScript command");
@@ -703,7 +710,7 @@ std::string CommandDispatcher::Dispatch(
         std::string result;
         // scene_patch owns a strict hold so it can reject an already-open user
         // transaction and report rollback only after Cancel() has completed.
-        const bool handlerOwnsTransaction = cmd_type == "native:scene_patch";
+        const bool handlerOwnsTransaction = cmd_type == "native:scene_patch" || cmd_type == "native:plugin_patch";
         const bool transact =
             IsMutatingNativeHandler(cmd_type) &&
             !CommandDispatcher::Detail::RequestIsDryRunOrPreview(cmd_type, command) &&

@@ -1,6 +1,7 @@
 #include "mcp_bridge/native_handlers.h"
 #include "mcp_bridge/handler_helpers.h"
 #include "mcp_bridge/bridge_gup.h"
+#include "mcp_bridge/plugin_access.h"
 
 #include <ifnpub.h>
 #include <iparamb.h>
@@ -14,46 +15,12 @@ using namespace HandlerHelpers;
 
 // ── ParamType2 → human-readable string ──────────────────────────
 static std::string ParamTypeToString(int ptype) {
-    int base = ptype & ~TYPE_TAB;
-    bool isTab = (ptype & TYPE_TAB) != 0;
-    std::string name;
-    switch (base) {
-    case TYPE_FLOAT:          name = "float"; break;
-    case TYPE_INT:            name = "int"; break;
-    case TYPE_RGBA:           name = "color"; break;
-    case TYPE_POINT3:         name = "point3"; break;
-    case TYPE_BOOL:           name = "bool"; break;
-    case TYPE_ANGLE:          name = "angle"; break;
-    case TYPE_PCNT_FRAC:      name = "percent"; break;
-    case TYPE_WORLD:          name = "worldUnits"; break;
-    case TYPE_STRING:         name = "string"; break;
-    case TYPE_FILENAME:       name = "filename"; break;
-    case TYPE_TEXMAP:         name = "texturemap"; break;
-    case TYPE_MTL:            name = "material"; break;
-    case TYPE_BITMAP:         name = "bitmap"; break;
-    case TYPE_INODE:          name = "node"; break;
-    case TYPE_REFTARG:        name = "refTarget"; break;
-    case TYPE_INDEX:          name = "index"; break;
-    case TYPE_MATRIX3:        name = "matrix3"; break;
-    case TYPE_POINT4:         name = "point4"; break;
-    case TYPE_FRGBA:          name = "frgba"; break;
-    case TYPE_ENUM:           name = "enum"; break;
-    case TYPE_TIMEVALUE:      name = "time"; break;
-    case TYPE_RADIOBTN_INDEX: name = "radioIndex"; break;
-    case TYPE_COLOR_CHANNEL:  name = "colorChannel"; break;
-    case TYPE_POINT2:         name = "point2"; break;
-    case TYPE_VALUE:          name = "maxValue"; break;
-    case TYPE_FPVALUE:        name = "fpValue"; break;
-    case TYPE_OBJECT:         name = "object"; break;
-    case TYPE_CONTROL:        name = "controller"; break;
-    default:                  name = "type_" + std::to_string(base); break;
-    }
-    if (isTab) name += "[]";
-    return name;
+    return PluginAccess::TypeName(ptype);
 }
 
 // ── Extract default value from ParamDef as JSON ─────────────────
 static json ParamDefValue(const ParamDef& pd) {
+    if (!(pd.flags & P_HAS_DEFAULT)) return nullptr;
     int base = pd.type & ~TYPE_TAB;
     try {
         switch (base) {
@@ -71,6 +38,7 @@ static json ParamDefValue(const ParamDef& pd) {
             return pd.def.i;
         case TYPE_RGBA:
         case TYPE_POINT3:
+            if (!pd.def.p) return nullptr;
             return json::array({pd.def.p->x, pd.def.p->y, pd.def.p->z});
         default:
             return nullptr;
@@ -82,6 +50,7 @@ static json ParamDefValue(const ParamDef& pd) {
 
 // ── Extract range from ParamDef ─────────────────────────────────
 static json ParamDefRange(const ParamDef& pd) {
+    if (!(pd.flags & P_HAS_RANGE)) return nullptr;
     int base = pd.type & ~TYPE_TAB;
     try {
         switch (base) {
@@ -116,7 +85,7 @@ static json DescribeParamBlock(ParamBlockDesc2* desc) {
         ParamID pid = desc->IndextoID(i);
         const ParamDef& pd = desc->GetParamDef(pid);
 
-        json param;
+        json param = PluginAccess::DescribeParameter(desc, pd);
         param["name"] = pd.int_name ? WideToUtf8(pd.int_name) : ("param_" + std::to_string(pid));
         param["id"] = (int)pid;
         param["type"] = ParamTypeToString(pd.type);
@@ -135,61 +104,7 @@ static json DescribeParamBlock(ParamBlockDesc2* desc) {
 
 // ── Build FPInterface descriptor JSON ───────────────────────────
 static json DescribeInterface(FPInterface* fpi) {
-    json iface;
-    FPInterfaceDesc* desc = nullptr;
-    try {
-        desc = fpi->GetDesc();
-    } catch (...) {
-        return nullptr;
-    }
-    if (!desc) return nullptr;
-
-    iface["name"] = (desc->internal_name.data() && desc->internal_name.data()[0])
-        ? WideToUtf8(desc->internal_name.data()) : "";
-    iface["id"] = json::array({
-        (int)desc->GetID().PartA(),
-        (int)desc->GetID().PartB()
-    });
-
-    // Functions
-    iface["functions"] = json::array();
-    for (int f = 0; f < desc->functions.Count(); f++) {
-        FPFunctionDef* fdef = desc->functions[f];
-        if (!fdef) continue;
-
-        json func;
-        func["name"] = (fdef->internal_name.data() && fdef->internal_name.data()[0])
-            ? WideToUtf8(fdef->internal_name.data()) : "";
-        func["returnType"] = ParamTypeToString(fdef->result_type);
-
-        func["params"] = json::array();
-        for (int p = 0; p < fdef->params.Count(); p++) {
-            FPParamDef* fpd = fdef->params[p];
-            if (!fpd) continue;
-            json param;
-            param["name"] = (fpd->internal_name.data() && fpd->internal_name.data()[0])
-                ? WideToUtf8(fpd->internal_name.data()) : ("arg" + std::to_string(p));
-            param["type"] = ParamTypeToString(fpd->type);
-            func["params"].push_back(param);
-        }
-        iface["functions"].push_back(func);
-    }
-
-    // Properties
-    iface["properties"] = json::array();
-    for (int p = 0; p < desc->props.Count(); p++) {
-        FPPropDef* pdef = desc->props[p];
-        if (!pdef) continue;
-
-        json prop;
-        prop["name"] = (pdef->internal_name.data() && pdef->internal_name.data()[0])
-            ? WideToUtf8(pdef->internal_name.data()) : "";
-        prop["type"] = ParamTypeToString(pdef->prop_type);
-        prop["readOnly"] = (pdef->setter_ID == FP_NO_FUNCTION);
-        iface["properties"].push_back(prop);
-    }
-
-    return iface;
+    return PluginAccess::DescribeInterface(fpi);
 }
 
 // ── Get MAXScript property names for a PB1 owner ────────────────

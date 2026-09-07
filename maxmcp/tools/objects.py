@@ -313,33 +313,31 @@ def create_object(
     )
     mode = normalize_pos_mode(pos_mode)
 
+    # A failed native request may have committed; never replay a constructor.
     if client.native_available:
-        try:
-            p = {"type": type, "pos_mode": mode}
+        p = {"type": type, "pos_mode": mode}
+        if name:
+            p["name"] = name
+        if params:
+            p["params"] = params
+        response = client.send_command(_json.dumps(p), cmd_type="native:create_object")
+        raw = response.get("result", "")
+        if isinstance(raw, str) and raw and not raw.strip().startswith("{"):
+            name = raw.strip().strip('"')
             if name:
-                p["name"] = name
-            if params:
-                p["params"] = params
-            response = client.send_command(_json.dumps(p), cmd_type="native:create_object")
-            raw = response.get("result", "")
-            if isinstance(raw, str) and raw and not raw.strip().startswith("{"):
-                name = raw.strip().strip('"')
-                if name:
-                    client.send_command(
-                        apply_pos_mode_fix_maxscript(
-                            name,
-                            list(pos) if pos is not None else None,
-                            mode,
-                        )
+                client.send_command(
+                    apply_pos_mode_fix_maxscript(
+                        name,
+                        list(pos) if pos is not None else None,
+                        mode,
                     )
-            return _finalize_create_result(
-                raw,
-                type=type,
-                pos=pos,
-                pos_mode=mode,
-            )
-        except RuntimeError:
-            pass
+                )
+        return _finalize_create_result(
+            raw,
+            type=type,
+            pos=pos,
+            pos_mode=mode,
+        )
 
     # ── MAXScript fallback (TCP) ──────────────────────────────────
     maxscript = build_create_object_maxscript(

@@ -16,7 +16,7 @@ Principles:
 - Do not call `get_bridge_status` or `get_session_context` as a session preamble.
 - Prefer a dedicated MCP tool over raw MAXScript when a tool clearly matches the task.
 - Do not render unless the user explicitly asks. Viewport capture is fine when visual proof is useful.
-- Multiple Max instances: use **MCP Claim This Max** in the target window so tools hit the right session.
+- Multiple Max instances: `list_max_instances`, `select_max_instance(pid)`, `get_selected_max_instance`, and `release_max_instance` are available in every profile. The first successful native connection stays bound to that Max. Starting or claiming another Max only changes the default for unbound clients. If the selected Max closes, explicitly select another or release it; clients never silently switch. `MCP_MAX_PID` or `MCP_MAX_PIPE` pins the startup target (`MCP_MAX_PIPE` takes precedence). Release also clears startup pinning.
 
 ## Tool Choice
 
@@ -32,6 +32,19 @@ Object/material/plugin inspection:
 - `analyze_node_orientation` — pivot, bbox, local axes, world matrix before rig/vehicle/camera transforms
 - `introspect_class`, `introspect_instance`, `introspect_osl`, `discover_plugin_classes`, `map_class_relationships` — unfamiliar plugin APIs and exact param names
 - Arnold materials such as `ai_standard_surface` may not appear in class discovery; inspect with `inspect_plugin_class` or `introspect_osl`
+
+Lighting:
+- `lighting_capabilities` → `create_lights` → `inspect_lights` → `edit_lights`.
+  Choose a supported renderer route, shape and explicit output unit. A finite bulb
+  is `area/sphere`; an HDRI dome is `environment`. Never infer integer enum meanings.
+- Distances accept scene/mm/cm/m/in/ft. Area emitters take a complete size and an
+  aim point or direction. RGB values are linear in the rendering color space;
+  Kelvin is explicit. EXR/HDR inputs get no extra gamma; preserve the renderer's
+  input primaries conversion and exposure. Existing sky maps can be bound directly.
+- For other plugin settings, use `inspect_plugin_class`/`inspect_plugin_instance`
+  with `schema_version=2`, a query or exact fields. Follow returned map references
+  and pass schema/state tokens to `plugin_patch`. Named enums use `{"enum":"name"}`
+  from the returned choices. Shared or animated resources require deliberate handling.
 
 Mutation:
 - Use object, modifier, material, controller, organization, and viewport tools when they match.

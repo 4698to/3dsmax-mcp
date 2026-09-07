@@ -20,6 +20,7 @@
 #include <maxscript/foundation/strings.h>
 #include <maxscript/maxwrapper/mxsobjects.h>
 #include <CoreFunctions.h>
+#include "mcp_bridge/color_value.h"
 
 class MCPBridgeGUP;
 
@@ -546,8 +547,15 @@ inline bool SetPB2ParamFromString(IParamBlock2* pb, ParamID pid, ParamType2 ptyp
         int i = std::stoi(valStr);
         return pb->SetValue(pid, t, i) != 0;
     }
-    case TYPE_POINT3:
-    case TYPE_RGBA: {
+    case TYPE_RGBA:
+    case TYPE_FRGBA: {
+        std::array<float, 4> rgba;
+        if (!ParseColorValue(valStr, rgba)) return false;
+        if (baseType == TYPE_FRGBA)
+            return pb->SetValue(pid, t, AColor(rgba[0], rgba[1], rgba[2], rgba[3])) != 0;
+        return pb->SetValue(pid, t, Color(rgba[0], rgba[1], rgba[2])) != 0;
+    }
+    case TYPE_POINT3: {
         // Parse multiple formats:
         // "[x,y,z]" or "x,y,z" — direct Point3
         // "(color r g b)" or "color r g b" — MAXScript color (0-255 range for RGBA)
@@ -557,11 +565,6 @@ inline bool SetPB2ParamFromString(IParamBlock2* pb, ParamID pid, ParamType2 ptyp
         // Try "(color r g b)" format
         if (sscanf(s.c_str(), "(color %f %f %f)", &x, &y, &z) == 3 ||
             sscanf(s.c_str(), "color %f %f %f", &x, &y, &z) == 3) {
-            // For RGBA type, values are 0-255 in MAXScript but stored as 0-1 internally
-            if (baseType == TYPE_RGBA) {
-                // Actually Max PB2 RGBA stores as 0-255 Point3 for some materials
-                // and 0-1 for others. Pass through as-is — the PB2 handles scaling.
-            }
             Point3 pt(x, y, z);
             return pb->SetValue(pid, t, pt) != 0;
         }

@@ -907,11 +907,32 @@ def discover_plugin_surface(
 
 @mcp.tool()
 def inspect_plugin_class(
-    class_name: str,
+    class_name: str = "",
     include_methods: bool = True,
     include_properties: bool = True,
+    schema_version: int = 1,
+    class_ref: dict[str, Any] | None = None,
+    query: str = "",
+    fields: list[Any] | None = None,
+    limit: int = 25,
+    offset: int = 0,
 ) -> str:
-    """Inspect a plugin class using runtime class scans plus showClass reflection."""
+    """Inspect a plugin class. schema_version=2 provides bounded SDK metadata,
+    exact class/property refs, labels, declared limits, published enums and coverage.
+    Query names/descriptions or request fields; follow next_offset for more.
+    Version 1 preserves the legacy showClass response.
+    """
+    if schema_version == 2:
+        from ..helpers.plugin_schema import inspect
+        result = inspect(class_name=class_name, class_ref=class_ref, query=query,
+                         fields=fields, limit=limit, offset=offset)
+        if not include_methods:
+            result.pop("interfaces", None)
+        if not include_properties:
+            result["properties"] = []
+        return json.dumps(result)
+    if schema_version != 1:
+        raise ValueError("schema_version must be 1 or 2")
     classes = _fetch_runtime_classes(filter_terms=[])
     matched = next((item for item in classes if _normalize(str(item.get("name", ""))) == _normalize(class_name)), None)
     if matched is None:
@@ -1054,8 +1075,22 @@ def _summarize_property_dump(property_dump: dict[str, Any], plugin_name: str, li
 
 
 @mcp.tool()
-def inspect_plugin_instance(name: str, detail: str = "normal") -> str:
-    """Inspect a live scene instance with plugin-aware summarization."""
+def inspect_plugin_instance(name: str = "", detail: str = "normal", schema_version: int = 1,
+                            owner_ref: dict[str, Any] | None = None, query: str = "",
+                            fields: list[Any] | None = None, limit: int = 25, offset: int = 0) -> str:
+    """Inspect a live plugin. Version 1 preserves the legacy scene-node response.
+    schema_version=2 returns bounded native values, exact owner/property refs,
+    schema/state guards, controllers and traversable map references. Query names
+    or request fields; paginate with next_offset. owner_ref accepts returned refs,
+    {node:{name/handle/path},scope:base_object|material|modifier,modifier_index:1},
+    {root:renderer}, or {root:environment}. Modifier indices are 1-based.
+    """
+    if schema_version == 2:
+        from ..helpers.plugin_schema import inspect
+        target = owner_ref if owner_ref is not None else {"node": {"name": name}, "scope": "base_object"}
+        return json.dumps(inspect(owner_ref=target, query=query, fields=fields, limit=limit, offset=offset))
+    if schema_version != 1:
+        raise ValueError("schema_version must be 1 or 2")
     from .inspect import inspect_object, inspect_properties
 
     inspected_object = _load_json(inspect_object(name), {})
@@ -1184,7 +1219,7 @@ def discover_plugin_classes(
 def introspect_class(
     class_name: str,
 ) -> str:
-    """Deep C++ SDK introspection of a class — returns the COMPLETE API surface."""
+    """Inspect SDK class descriptors and published interfaces; unpublished APIs may be absent."""
     blocked = {"oslmap", "osl_map", "osl"}
     if class_name.strip().lower() in blocked:
         return json.dumps({"error": f"OSLMap has dynamic params that produce unbounded output. Use introspect_osl instead.", "redirect": "introspect_osl"})

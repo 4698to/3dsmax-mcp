@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "tool_count": 159,
+  "tool_count": 168,
   "starter_tools": [
     "query_scene",
     "get_session_context",
@@ -14,13 +14,17 @@
     {
       "name": "Setup",
       "hint": "Bridge status, session context",
-      "tool_count": 3,
+      "tool_count": 7,
       "categories": [
         {
           "name": "Connection",
           "tools": [
             "get_bridge_status",
-            "get_plugin_capabilities"
+            "get_plugin_capabilities",
+            "get_selected_max_instance",
+            "list_max_instances",
+            "release_max_instance",
+            "select_max_instance"
           ]
         },
         {
@@ -144,7 +148,7 @@
     {
       "name": "Inspect",
       "hint": "Object/plugin introspection and analysis",
-      "tool_count": 17,
+      "tool_count": 18,
       "categories": [
         {
           "name": "Analysis",
@@ -175,6 +179,7 @@
             "introspect_class",
             "introspect_instance",
             "list_plugin_classes",
+            "plugin_patch",
             "refresh_plugin_manifest"
           ]
         }
@@ -204,8 +209,17 @@
     {
       "name": "Viewport & Render",
       "hint": "Captures and rendering",
-      "tool_count": 6,
+      "tool_count": 10,
       "categories": [
+        {
+          "name": "Lighting",
+          "tools": [
+            "create_lights",
+            "edit_lights",
+            "inspect_lights",
+            "lighting_capabilities"
+          ]
+        },
         {
           "name": "Render",
           "tools": [
@@ -1274,7 +1288,7 @@
     },
     {
       "name": "inspect_plugin_class",
-      "description": "Inspect a plugin class using runtime class scans plus showClass reflection.",
+      "description": "Inspect a plugin class. schema_version=2 provides bounded SDK metadata, exact class/property refs, labels, declared limits, published enums and coverage. Query names/descriptions or request fields; follow next_offset for more. Version 1 preserves the legacy showClass response.",
       "category": "Plugins",
       "group": "Inspect",
       "module": "plugins",
@@ -1289,11 +1303,25 @@
           },
           "include_properties": {
             "type": "boolean"
+          },
+          "schema_version": {
+            "type": "integer"
+          },
+          "class_ref": {},
+          "query": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {}
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
           }
-        },
-        "required": [
-          "class_name"
-        ]
+        }
       },
       "example": {
         "class_name": "Box"
@@ -1328,7 +1356,7 @@
     },
     {
       "name": "inspect_plugin_instance",
-      "description": "Inspect a live scene instance with plugin-aware summarization.",
+      "description": "Inspect a live plugin. Version 1 preserves the legacy scene-node response. schema_version=2 returns bounded native values, exact owner/property refs, schema/state guards, controllers and traversable map references. Query names or request fields; paginate with next_offset. owner_ref accepts returned ",
       "category": "Plugins",
       "group": "Inspect",
       "module": "plugins",
@@ -1340,11 +1368,25 @@
           },
           "detail": {
             "type": "string"
+          },
+          "schema_version": {
+            "type": "integer"
+          },
+          "owner_ref": {},
+          "query": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {}
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
           }
-        },
-        "required": [
-          "name"
-        ]
+        }
       },
       "example": {
         "name": "MCP_SmokeTarget"
@@ -1355,7 +1397,7 @@
     },
     {
       "name": "introspect_class",
-      "description": "Deep C++ SDK introspection of a class \u2014 returns the COMPLETE API surface.",
+      "description": "Inspect SDK class descriptors and published interfaces; unpublished APIs may be absent.",
       "category": "Plugins",
       "group": "Inspect",
       "module": "plugins",
@@ -1432,6 +1474,31 @@
       },
       "risk": "safe",
       "routing": "native:list_plugin_classes",
+      "starter": false
+    },
+    {
+      "name": "plugin_patch",
+      "description": "Atomically edit inspected PB2 properties with native typed readback.",
+      "category": "Plugins",
+      "group": "Inspect",
+      "module": "plugin_edit",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "edits": {
+            "type": "array",
+            "items": {}
+          }
+        },
+        "required": [
+          "edits"
+        ]
+      },
+      "example": {
+        "edits": []
+      },
+      "risk": "advanced",
+      "routing": "python",
       "starter": false
     },
     {
@@ -4500,6 +4567,75 @@
       "starter": false
     },
     {
+      "name": "get_selected_max_instance",
+      "description": "Read this MCP process's selected target and availability without switching it.",
+      "category": "Connection",
+      "group": "Setup",
+      "module": "routing",
+      "schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "example": {},
+      "risk": "safe",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "list_max_instances",
+      "description": "List live Max instances in default order without selecting one.",
+      "category": "Connection",
+      "group": "Setup",
+      "module": "routing",
+      "schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "example": {},
+      "risk": "safe",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "release_max_instance",
+      "description": "Release this MCP process's target, including startup pinning; next connection uses the default.",
+      "category": "Connection",
+      "group": "Setup",
+      "module": "routing",
+      "schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "example": {},
+      "risk": "read",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "select_max_instance",
+      "description": "Bind this MCP process to a live Max PID until explicitly changed or released.",
+      "category": "Connection",
+      "group": "Setup",
+      "module": "routing",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "pid": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pid"
+        ]
+      },
+      "example": {
+        "pid": 1
+      },
+      "risk": "read",
+      "routing": "python",
+      "starter": false
+    },
+    {
       "name": "get_session_context",
       "description": "Bundle bridge, capabilities, scene overview, and selection in one call.",
       "category": "Session",
@@ -6080,6 +6216,118 @@
         "name": "$first_object"
       },
       "risk": "advanced",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "create_lights",
+      "description": "Create 1..32 semantic lights in one native transaction with typed readback. Finite spherical bulbs are area/sphere; HDRI skies are environment. Distances use scene, mm, cm, m, in or ft. Orientation uses a world aim_at or direction. Discover supported kinds and physical/native output units first. Nat",
+      "category": "Lighting",
+      "group": "Viewport & Render",
+      "module": "lighting",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "lights": {
+            "type": "array",
+            "items": {}
+          },
+          "renderer": {
+            "type": "string"
+          },
+          "distance_unit": {
+            "type": "string"
+          },
+          "expected_context": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lights"
+        ]
+      },
+      "example": {
+        "lights": []
+      },
+      "risk": "advanced",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "edit_lights",
+      "description": "Edit inspected lights atomically. Each edit contains light_ref, expected_light (the light_token from inspection), changes and optional sharing='all_instances'. Changes accept color, output, enabled, cast_shadows and a complete size for the existing shape. Dimensions use distance_unit. A changed ligh",
+      "category": "Lighting",
+      "group": "Viewport & Render",
+      "module": "lighting",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "edits": {
+            "type": "array",
+            "items": {}
+          },
+          "distance_unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "edits"
+        ]
+      },
+      "example": {
+        "edits": []
+      },
+      "risk": "advanced",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "inspect_lights",
+      "description": "Decode actual light settings. Targets are light_ref objects returned by create_lights, or {node_ref:{handle/name/path},provider:optional}. detail=bindings includes exact properties/schema/state tokens for guarded edits.",
+      "category": "Lighting",
+      "group": "Viewport & Render",
+      "module": "lighting",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "targets": {
+            "type": "array",
+            "items": {}
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "targets"
+        ]
+      },
+      "example": {
+        "targets": []
+      },
+      "risk": "advanced",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "lighting_capabilities",
+      "description": "Discover supported lighting shapes, units, renderer routes and color policy. Renderer is current or an exact installed renderer name. detail=full also returns the strict light specification schema. Never changes the renderer.",
+      "category": "Lighting",
+      "group": "Viewport & Render",
+      "module": "lighting",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "renderer": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "example": {},
+      "risk": "read",
       "routing": "python",
       "starter": false
     },

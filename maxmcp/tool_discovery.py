@@ -79,7 +79,12 @@ TOOLSET_SPECS = (
     ToolsetSpec(
         "inspection",
         "Object/property inspection, plugin introspection, and reference learning tools.",
-        ("inspect", "plugins", "learning"),
+        ("inspect", "plugins", "plugin_edit", "learning"),
+    ),
+    ToolsetSpec(
+        "lighting",
+        "Renderer-independent lights, environment maps, capabilities and verified edits.",
+        ("lighting",),
     ),
     ToolsetSpec(
         "animation",

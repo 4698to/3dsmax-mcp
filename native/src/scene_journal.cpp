@@ -4,6 +4,7 @@
 #include <ISceneEventManager.h>
 #include <deque>
 #include <mutex>
+#include <notify.h>
 
 using namespace HandlerHelpers;
 
@@ -17,7 +18,10 @@ std::mutex g_mutex;
 std::deque<json> g_entries;
 unsigned long long g_seq = 0;
 unsigned long long g_mutationSeq = 0;
+unsigned long long g_epoch = 1;
 SceneEventNamespace::CallbackKey g_callbackKey = 0;
+bool g_resetNotifications = false;
+void SceneReplaced(void*, NotifyInfo*) { Reset(); }
 
 void AppendEvent(
     const std::string& type,
@@ -88,6 +92,11 @@ JournalNodeCallback g_callback;
 } // namespace
 
 void Register() {
+    if (!g_resetNotifications) {
+        RegisterNotification(SceneReplaced, nullptr, NOTIFY_SYSTEM_POST_RESET);
+        RegisterNotification(SceneReplaced, nullptr, NOTIFY_FILE_POST_OPEN);
+        g_resetNotifications = true;
+    }
     if (g_callbackKey != 0) return;
     ISceneEventManager* manager = GetISceneEventManager();
     if (!manager) return;
@@ -95,6 +104,11 @@ void Register() {
 }
 
 void Unregister() {
+    if (g_resetNotifications) {
+        UnRegisterNotification(SceneReplaced, nullptr, NOTIFY_SYSTEM_POST_RESET);
+        UnRegisterNotification(SceneReplaced, nullptr, NOTIFY_FILE_POST_OPEN);
+        g_resetNotifications = false;
+    }
     if (g_callbackKey == 0) return;
     ISceneEventManager* manager = GetISceneEventManager();
     if (manager) {
@@ -105,9 +119,15 @@ void Unregister() {
 
 void Reset() {
     std::lock_guard<std::mutex> lock(g_mutex);
+    ++g_epoch;
     g_entries.clear();
     ++g_seq;
     ++g_mutationSeq;
+}
+
+unsigned long long Epoch() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_epoch;
 }
 
 bool IsRegistered() {

@@ -11,7 +11,7 @@ Connect AI agents to Autodesk 3ds Max through the [Model Context Protocol](https
 
 Automate everything!
 
-**Current release: 1.6.6 — Astra Special Release** — see [CHANGELOG.md](docs/CHANGELOG.md).
+**Current release: 1.6.7** — see [CHANGELOG.md](docs/CHANGELOG.md).
 
 ## Features
 
@@ -35,7 +35,7 @@ uv sync
 uv run python install.py
 ```
 
-Choose the MCP tool profile when prompted. **Full** is the default for maximum client compatibility and performance. **Progressive** exposes three discovery tools and loads exact operational schemas only when needed, which can substantially reduce context use for local or smaller models.
+Choose the MCP tool profile when prompted. **Full** is the default for maximum client compatibility and performance. **Progressive** exposes instance routing controls plus three discovery tools and loads exact operational schemas only when needed, which can substantially reduce context use for local or smaller models.
 
 Restart 3ds Max, then connect your MCP client. The installer registers the server where it can; see [Advanced configuration](docs/ADVANCED.md) for manual client setup.
 
@@ -46,6 +46,8 @@ git pull
 uv sync
 uv run python install.py
 ```
+
+Each MCP process stays attached to the first Max instance it connects to. Use `list_max_instances`, `select_max_instance(pid)`, `get_selected_max_instance`, or `release_max_instance` to manage routing in any profile. `MCP_MAX_PID` and the existing `MCP_MAX_PIPE` support startup pinning. Starting or claiming another Max changes the default for unbound clients only.
 
 ## Tools
 
@@ -160,15 +162,29 @@ uv run python install.py
 | `discover_plugin_surface` | Find plugin-related classes and entry points |
 | `discover_plugin_classes` | Enumerate registered SDK classes |
 | `list_plugin_classes` | List classes for a plugin or superclass family |
-| `inspect_plugin_class` | Runtime class scan + showClass reflection |
+| `inspect_plugin_class` | SDK schema v2: bounded metadata, exact bindings and enum sources; legacy reflection retained |
 | `inspect_plugin_constructor` | Creation notes for a plugin class |
-| `inspect_plugin_instance` | Live instance inspection with plugin context |
+| `inspect_plugin_instance` | SDK schema v2: live values, linked maps and guarded edit tokens |
+| `plugin_patch` | Atomic typed PB2 edits with readback and stale/shared/animation guards |
 | `get_plugin_manifest` | Structured manifest (classes, workflows, gotchas) |
 | `refresh_plugin_manifest` | Rebuild manifest from live runtime |
-| `introspect_class` | Full C++ SDK API surface for a class |
+| `introspect_class` | SDK parameter descriptors and published interface metadata |
 | `introspect_instance` | Deep SDK introspection with live values |
 
 MCP resources: `resource://3dsmax-mcp/plugins/{name}/manifest|guide|recipes|gotchas`
+
+### Lighting
+
+| Tool | Description |
+|------|-------------|
+| `lighting_capabilities` | Installed renderer routes, emitter shapes, units and color policy |
+| `create_lights` | Semantic lights and environment graphs in one verified native transaction |
+| `inspect_lights` | Decode actual light settings and linked emission maps |
+| `edit_lights` | Guarded color, output, size, enable and shadow edits |
+
+Providers cover V-Ray, Octane and native photometric emitters. Query capabilities
+for the current renderer: shapes, units and environment routes differ. HDRI maps
+and existing procedural skies use the provider's dome or environment binding.
 
 ### Controllers & animation
 

@@ -142,6 +142,8 @@ def first_doc_line(func: ast.FunctionDef) -> str:
 # These tools compile/validate a temporary graph in Python before forwarding
 # a smaller exact-ID payload. Direct native probes cannot run that orchestration.
 SKIP_TOOL_NAMES = {
+    "plugin_patch",
+    "lighting_capabilities", "create_lights", "inspect_lights", "edit_lights",
     "curve_model",
     "inspect_curve",
     "edit_curve",

@@ -24,13 +24,17 @@ static std::vector<std::pair<std::string, std::string>> ParseMtlParams(const std
     std::vector<std::pair<std::string, std::string>> result;
     size_t i = 0;
     while (i < s.size()) {
-        while (i < s.size() && s[i] == ' ') i++;
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
         if (i >= s.size()) break;
         size_t keyStart = i;
         while (i < s.size() && s[i] != ':') i++;
-        if (i >= s.size()) break;
+        if (i >= s.size())
+            throw std::runtime_error(StructuredErrorPayload("BAD_PARAM", "Expected material key:value parameters"));
         std::string key = s.substr(keyStart, i - keyStart);
+        if (key.empty() || key.find_first_of(" \t\r\n") != std::string::npos)
+            throw std::runtime_error(StructuredErrorPayload("BAD_PARAM", "Invalid material parameter name"));
         i++;
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) i++;
         size_t valStart = i;
         if (i < s.size() && (s[i] == '[' || s[i] == '(')) {
             char open = s[i], close = (open == '[') ? ']' : ')';
@@ -40,13 +44,19 @@ static std::vector<std::pair<std::string, std::string>> ParseMtlParams(const std
                 else if (s[i] == close) depth--;
                 i++;
             }
+            if (depth != 0)
+                throw std::runtime_error(StructuredErrorPayload("BAD_PARAM", "Unclosed material parameter value: " + key));
         } else if (i < s.size() && s[i] == '"') {
             i++;
             while (i < s.size() && s[i] != '"') { if (s[i] == '\\') i++; i++; }
-            if (i < s.size()) i++;
+            if (i >= s.size())
+                throw std::runtime_error(StructuredErrorPayload("BAD_PARAM", "Unclosed material string: " + key));
+            i++;
         } else {
-            while (i < s.size() && s[i] != ' ') i++;
+            while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) i++;
         }
+        if (i == valStart)
+            throw std::runtime_error(StructuredErrorPayload("BAD_PARAM", "Missing material parameter value: " + key));
         result.push_back({key, s.substr(valStart, i - valStart)});
     }
     return result;
@@ -97,6 +107,21 @@ std::string NativeHandlers::AssignMaterial(const std::string& params, MCPBridgeG
 
         Interface* ip = GetCOREInterface();
         TimeValue t = ip->GetTime();
+
+        // Validate every target before creating a material or touching assignments.
+        for (unsigned long long handle : handles) {
+            if (!FindNodeByHandle(handle))
+                throw std::runtime_error(StructuredErrorPayload("NOT_FOUND", "Material target handle not found",
+                    {{"handle", handle}}));
+        }
+        for (const auto& name : names) {
+            auto matches = CollectNodesByExactName(name);
+            if (matches.empty())
+                throw std::runtime_error(StructuredErrorPayload("NOT_FOUND", "Material target not found: " + name));
+            if (matches.size() > 1)
+                throw std::runtime_error(StructuredErrorPayload("AMBIGUOUS", "Ambiguous material target: " + name,
+                    {{"message", "Pass handles to disambiguate material targets."}}));
+        }
 
         // Find material ClassDesc — the lookup MUST stay inside MATERIAL_CLASS_ID.
         // A name-only fallback across every superclass is not safe here: several
@@ -208,12 +233,25 @@ std::string NativeHandlers::AssignMaterial(const std::string& params, MCPBridgeG
             mtl->SetName(wname.c_str());
         }
 
-        // Set params via IParamBlock2
-        if (!matParams.empty()) {
-            auto kvPairs = ParseMtlParams(matParams);
-            for (auto& [key, val] : kvPairs) {
-                SetParamByName((Animatable*)mtl, key, val, t);
+        // Reject failed parameters before any node receives this new material.
+        json appliedParameters = json::array();
+        try {
+            if (!matParams.empty()) {
+                auto kvPairs = ParseMtlParams(matParams);
+                if (kvPairs.empty())
+                    throw std::runtime_error(StructuredErrorPayload("BAD_PARAM", "Expected material key:value parameters"));
+                for (auto& [key, val] : kvPairs) {
+                    bool applied = false;
+                    try { applied = SetParamByName((Animatable*)mtl, key, val, t); } catch (const std::exception&) {}
+                    if (!applied)
+                        throw std::runtime_error(StructuredErrorPayload("BAD_PARAM", "Failed to set material parameter: " + key,
+                            {{"property", key}, {"value", val}, {"material_class", matClass}}));
+                    appliedParameters.push_back(key);
+                }
             }
+        } catch (...) {
+            mtl->DeleteThis();
+            throw;
         }
 
         // Assign to nodes
@@ -268,6 +306,7 @@ std::string NativeHandlers::AssignMaterial(const std::string& params, MCPBridgeG
         result["assigned"] = assigned;
         result["assignedCount"] = assignCount;
         result["notFound"] = notFound;
+        result["appliedParameters"] = appliedParameters;
         return result.dump();
     });
 }

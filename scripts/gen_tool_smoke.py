@@ -31,6 +31,10 @@ FLAG_EXPECT_ERROR = 2
 
 # Skipped unless run_tool_smoke(include_skipped=True) / native includeSkipped
 SKIP_DEFAULT = {
+    "create_lights",
+    "inspect_lights",
+    "edit_lights",
+    "plugin_patch",
     "render_scene",
     "inspect_max_file",
     "merge_from_file",
@@ -183,6 +187,9 @@ CUSTOM: dict[str, dict] = {
 }
 
 MUTATE_TOOLS = {
+    "create_lights",
+    "edit_lights",
+    "plugin_patch",
     "curve_model",
     "edit_curve",
     "create_object",

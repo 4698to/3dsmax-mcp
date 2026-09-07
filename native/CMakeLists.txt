@@ -99,6 +99,8 @@ set(SOURCES
     src/handlers/controller_handlers.cpp
     src/handlers/keyframe_handlers.cpp
     src/handlers/plugin_introspect_handlers.cpp
+    src/plugin_access.cpp
+    src/handlers/plugin_access_handlers.cpp
     src/handlers/organize_handlers.cpp
     src/handlers/learning_handlers.cpp
     src/handlers/effects_handlers.cpp
@@ -177,6 +179,9 @@ if(MCP_BUILD_TRANSACTION_POLICY_TESTS)
     add_executable(capture_region_tests tests/capture_region_tests.cpp)
     target_include_directories(capture_region_tests PRIVATE include third_party)
     add_test(NAME capture_region COMMAND capture_region_tests)
+    add_executable(color_value_tests tests/color_value_tests.cpp)
+    target_include_directories(color_value_tests PRIVATE include)
+    add_test(NAME color_value COMMAND color_value_tests)
 endif()
 
 option(MCP_BUILD_AGENT_VIEWPORT_PROBE "Build optional live agent viewport SDK test harness" OFF)

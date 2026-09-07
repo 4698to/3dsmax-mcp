@@ -2,6 +2,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import json
 import os
+import re
 import socket
 import threading
 import time
@@ -14,6 +15,11 @@ DEFAULT_PORT = 8765
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_PIPE_NAME = r"\\.\pipe\3dsmax-mcp"
 MCP_PIPE_ENV = "MCP_MAX_PIPE"
+
+
+class RequestOutcomeUnknown(Exception):
+    """The request reached Max but its response was lost; never replay it."""
+
 
 # Win32 constants for named pipe
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -105,6 +111,15 @@ class MaxClient:
         self._local = threading.local()
         self._control_channel = False
         self._pinned_pipe_name: str | None = None
+        self._bound_target: dict[str, Any] | None = None
+        env_pipe = os.environ.get(MCP_PIPE_ENV)
+        env_pid = os.environ.get("MCP_MAX_PID")
+        if env_pid and (not env_pid.isdecimal() or int(env_pid) <= 0):
+            raise ValueError("MCP_MAX_PID must be a positive process ID")
+        self._startup_pipe = env_pipe or (fr"\\.\pipe\3dsmax-mcp-pid-{int(env_pid)}" if env_pid else None)
+        self._startup_source = "environment" if self._startup_pipe else "explicit"
+        if self._startup_pipe is None and pipe_name != DEFAULT_PIPE_NAME:
+            self._startup_pipe = pipe_name
 
     def clear_last_response(self) -> None:
         """Clear thread-local metadata from the previous command."""
@@ -123,6 +138,7 @@ class MaxClient:
                 "protocol_version": meta.get("protocolVersion"),
                 "client_round_trip_ms": meta.get("clientRoundTripMs"),
                 "fallback_error": meta.get("fallbackError"),
+                **meta.get("target", {}),
             }
         error = getattr(self._local, "last_error", None)
         if isinstance(error, dict):
@@ -159,49 +175,81 @@ class MaxClient:
     def _active_instance(self) -> dict[str, Any] | None:
         return self._load_instance(self._config_dir() / "active_instance.json")
 
-    def _live_instances(self) -> list[dict[str, Any]]:
-        instances_dir = self._config_dir() / "instances"
-        try:
-            paths = sorted(instances_dir.glob("*.json"))
-        except OSError:
-            return []
+    @staticmethod
+    def _target(pipe: str, source: str) -> dict[str, Any]:
+        match = re.search(r"-pid-(\d+)$", pipe)
+        return {"target_pid": int(match[1]) if match else None,
+                "target_pipe": pipe, "target_source": source, "pinned": True}
 
-        live: list[dict[str, Any]] = []
-        for path in paths:
+    def _live_instances(self) -> list[dict[str, Any]]:
+        live = []
+        for path in (self._config_dir() / "instances").glob("*.json"):
             data = self._load_instance(path)
+            try:
+                updated = path.stat().st_mtime_ns
+            except OSError:
+                continue
             if data and self._probe_pipe_available(data["pipe"]):
-                live.append(data)
-        return live
+                live.append({**data, "updated": updated})
+        return sorted(live, key=lambda item: item["updated"], reverse=True)
+
+    def _default_target(self) -> dict[str, Any]:
+        live = self._live_instances()
+        active = self._active_instance()
+        try:
+            claimed = (self._config_dir() / "active_instance.json").stat().st_mtime_ns
+        except OSError:
+            claimed = 0
+        if active and self._probe_pipe_available(active["pipe"]) and (not live or claimed >= live[0]["updated"]):
+            return self._target(active["pipe"], "claim")
+        return self._target(live[0]["pipe"] if live else DEFAULT_PIPE_NAME, "default")
 
     def _resolve_pipe_name(self) -> str:
+        target = self._bound_target
         if self._pinned_pipe_name is not None:
-            return self._pinned_pipe_name
-        env_pipe = os.environ.get(MCP_PIPE_ENV)
-        if env_pipe:
-            return env_pipe
+            target = self._target(self._pinned_pipe_name, "explicit")
+        if target is None and self._startup_pipe:
+            target = self._target(self._startup_pipe, self._startup_source)
+        if target is None:
+            target = self._default_target()
+        self._local.route_candidate = dict(target)
+        return target["target_pipe"]
 
-        if self.pipe_name != DEFAULT_PIPE_NAME:
-            return self.pipe_name
+    def list_max_instances(self) -> dict[str, Any]:
+        with self._pipe_lock:
+            default = self._default_target()
+            instances = self._live_instances()
+            instances.sort(key=lambda item: item["pipe"] != default["target_pipe"])
+            return {"instances": [{**item, "default": item["pipe"] == default["target_pipe"],
+                                   "selected": bool(self._bound_target and item["pipe"] == self._bound_target["target_pipe"])}
+                                  for item in instances]}
 
-        active = self._active_instance()
-        if active and self._probe_pipe_available(active["pipe"]):
-            return active["pipe"]
+    def get_selected_max_instance(self) -> dict[str, Any]:
+        with self._pipe_lock:
+            target = self._bound_target or (self._target(self._startup_pipe, self._startup_source) if self._startup_pipe else None)
+            if target is None:
+                return {"target_pid": None, "target_pipe": None, "target_source": None, "pinned": False, "available": False}
+            return {**target, "available": self._probe_pipe_available(target["target_pipe"])}
 
-        live = self._live_instances()
-        if len(live) == 1:
-            return live[0]["pipe"]
-        if len(live) > 1:
-            labels = ", ".join(
-                f"{item.get('instance_id', 'unknown')} pid={item.get('pid', '?')}"
-                for item in live
-            )
-            raise AmbiguousMaxInstanceError(
-                "Multiple 3ds Max MCP instances are running. "
-                "In the target 3ds Max window, run MCP > MCP Claim This Max. "
-                f"Available instances: {labels}"
-            )
+    def select_max_instance(self, pid: int) -> dict[str, Any]:
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            raise ValueError("pid must be a positive process ID")
+        pipe = fr"\\.\pipe\3dsmax-mcp-pid-{pid}"
+        with self._pipe_lock:
+            if not self._probe_pipe_available(pipe):
+                raise ConnectionError(f"3ds Max PID {pid} is unavailable; selection was not changed")
+            self._close_pipe_handle()
+            self._selected_pipe_name = None
+            self._bound_target = self._target(pipe, "explicit")
+            return {**self._bound_target, "available": True}
 
-        return DEFAULT_PIPE_NAME
+    def release_max_instance(self) -> dict[str, Any]:
+        with self._pipe_lock:
+            self._close_pipe_handle()
+            self._selected_pipe_name = None
+            self._bound_target = None
+            self._startup_pipe = None
+            return {"target_pid": None, "target_pipe": None, "target_source": None, "pinned": False}
 
     def _probe_pipe_available(self, pipe_name: str | None = None) -> bool:
         """Best-effort probe that treats a busy pipe as available."""
@@ -294,18 +342,31 @@ class MaxClient:
         Only cancellation and pure desktop capture use this channel. It cannot
         fall back to TCP or re-resolve another Max after a claim/environment change.
         """
-        pipe = (self._selected_pipe_name if self._pipe_lock.locked() else None) or self._resolve_pipe_name()
-        control = MaxClient(host=self.host, port=self.port, timeout=timeout or min(self.timeout, 15.0),
-                            transport="pipe", pipe_name=pipe)
-        control._control_channel = True
-        control._pinned_pipe_name = pipe
-        self.clear_last_response()
+        acquired = self._pipe_lock.acquire(blocking=False)
         try:
-            return control.send_command(command, cmd_type=cmd_type, timeout=timeout)
+            if not acquired and self._bound_target is None:
+                raise ConnectionError("Max target selection is in progress; retry the control request")
+            pipe = self._bound_target["target_pipe"] if self._bound_target else self._resolve_pipe_name()
+            target = dict(self._bound_target or getattr(self._local, "route_candidate", self._target(pipe, "default")))
+            control = MaxClient(host=self.host, port=self.port, timeout=timeout or min(self.timeout, 15.0),
+                                transport="pipe", pipe_name=pipe)
+            control._control_channel = True
+            control._bound_target = target
+            self.clear_last_response()
+            try:
+                response = control.send_command(command, cmd_type=cmd_type, timeout=timeout)
+                if acquired and self._bound_target is None:
+                    self._bound_target = target
+                return response
+            finally:
+                if acquired and self._bound_target is None and getattr(control._local, "request_target", None):
+                    self._bound_target = target
+                self._local.last_response = getattr(control._local, "last_response", None)
+                self._local.last_error = getattr(control._local, "last_error", None)
+                control._close_pipe_handle()
         finally:
-            self._local.last_response = getattr(control._local, "last_response", None)
-            self._local.last_error = getattr(control._local, "last_error", None)
-            control._close_pipe_handle()
+            if acquired:
+                self._pipe_lock.release()
 
     def send_command(
         self,
@@ -344,6 +405,10 @@ class MaxClient:
             except AmbiguousMaxInstanceError:
                 raise
             except (ConnectionError, TimeoutError) as exc:
+                if self._bound_target or self._startup_pipe or self._pinned_pipe_name:
+                    target = self._bound_target or self._target(self._startup_pipe or self._pinned_pipe_name, self._startup_source)
+                    self._local.last_error = {**target, "transport": "namedpipe", "error": str(exc)}
+                    raise ConnectionError(f"Selected 3ds Max target {target['target_pipe']} is unavailable. Select another instance or release it explicitly. {exc}") from exc
                 fallback_error = str(exc)
                 transport_used = "tcp"
                 response_data = self._send_via_tcp(request, effective_timeout)
@@ -363,6 +428,8 @@ class MaxClient:
         meta = response.setdefault("meta", {})
         meta.setdefault("transport", transport_used)
         meta.setdefault("requestedTransport", self.transport)
+        if transport_used == "namedpipe":
+            meta["target"] = getattr(self._local, "request_target", None) or self._bound_target or {}
         if fallback_error:
             meta.setdefault("fallbackError", fallback_error)
         self._local.last_response = response
@@ -372,15 +439,17 @@ class MaxClient:
     def _send_via_pipe(self, request: str, timeout: float) -> bytes:
         deadline = time.perf_counter() + timeout
         data = (request + "\n").encode("utf-8")
-        pipe_name = self._resolve_pipe_name()
-
         with self._pipe_lock:
+            pipe_name = self._resolve_pipe_name()
             if self._selected_pipe_name != pipe_name:
                 self._close_pipe_handle()
                 self._selected_pipe_name = pipe_name
 
             for attempt in range(2):
                 handle = self._ensure_pipe_handle(deadline, pipe_name)
+                if self._bound_target is None:
+                    self._bound_target = getattr(self._local, "route_candidate", None) or self._target(pipe_name, "default")
+                self._local.request_target = dict(self._bound_target)
                 try:
                     total_written = 0
                     while total_written < len(data):
@@ -392,6 +461,7 @@ class MaxClient:
                             ctypes.byref(written),
                             None,
                         )
+                        total_written += written.value
                         if not ok:
                             err = ctypes.get_last_error()
                             if err == _ERROR_BROKEN_PIPE:
@@ -403,16 +473,15 @@ class MaxClient:
                             raise ConnectionError(
                                 "Pipe write returned 0 bytes written."
                             )
-                        total_written += written.value
 
                     response_data = bytearray()
                     buf = ctypes.create_string_buffer(65536)
                     while True:
                         if time.perf_counter() >= deadline:
                             self._close_pipe_handle()
-                            raise TimeoutError(
+                            raise RequestOutcomeUnknown(
                                 f"Timed out waiting for named pipe response after "
-                                f"{timeout}s."
+                                f"{timeout}s. The request may have committed; inspect before retrying."
                             )
 
                         bytes_read = wintypes.DWORD()
@@ -440,11 +509,15 @@ class MaxClient:
                             )
                 except BrokenPipeError:
                     self._close_pipe_handle()
+                    if total_written:
+                        raise RequestOutcomeUnknown("Pipe closed after dispatch. The request may have committed; inspect before retrying.") from None
                     if attempt == 0 and time.perf_counter() < deadline:
                         continue
                     raise ConnectionError("Named pipe connection closed during request.")
                 except ConnectionError:
                     self._close_pipe_handle()
+                    if total_written:
+                        raise RequestOutcomeUnknown("Connection lost after dispatch. The request may have committed; inspect before retrying.") from None
                     if attempt == 0 and time.perf_counter() < deadline:
                         continue
                     raise

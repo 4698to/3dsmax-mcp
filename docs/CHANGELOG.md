@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## [1.6.7] — 2026-09-07
+
+### Added
+
+- Sticky per-process Max routing with instance selection, release and startup PID
+  pinning in every profile. Existing clients stay on their target when another Max
+  is started or claimed; unavailable targets never silently fall back (#19).
+
+- Renderer-agnostic lighting discovery, creation, inspection and guarded editing,
+  with provider-specific emitters, output units and environment bindings.
+- Plugin inspection schema v2 with exact identities, bounded queries, declared
+  limits, sourced enums, linked maps and state tokens; atomic typed `plugin_patch`.
+
+### Fixed
+
+- Physical Material colors use the correct SDK parameter type; failed material
+  parameters report errors instead of silently keeping defaults.
+- Concurrent fallback viewport and identification captures use unique output paths.
+
+- Guarded light edits distinguish actual sharing from script, undo and renderer
+  bookkeeping. Corrected photometric initialization/dimensions and Octane shape IDs.
+- Agent viewport framing supports light rigs; light vectors use numeric arrays
+  and vertical aiming has a stable default orientation.
+- Failed object parameters propagate errors instead of leaving default objects.
+- Lost native responses are not replayed as new mutations or fallback constructors.
+- SDK introspection distinguishes declared defaults/ranges from uninitialized
+  metadata, and the new inspector discovers deferred classes through Max's registry.
+
 ## [1.6.6] — 2026-09-05
 
 **Astra Special Release** — an agent modeling workspace with independent vision,

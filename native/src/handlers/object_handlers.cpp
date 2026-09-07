@@ -467,7 +467,6 @@ std::string NativeHandlers::CreateObject(const std::string& params, MCPBridgeGUP
         if (!cd) cd = FindClassDescByName(type, CAMERA_CLASS_ID);
         if (!cd) cd = FindClassDescByName(type, HELPER_CLASS_ID);
         if (!cd) cd = FindClassDescByName(type, SYSTEM_CLASS_ID);
-        if (!cd) cd = FindClassDescByName(type); // any superclass
         if (!cd) throw std::runtime_error("Unknown object class: " + type);
 
         // Create the object instance
@@ -499,7 +498,7 @@ std::string NativeHandlers::CreateObject(const std::string& params, MCPBridgeGUP
                 if (lkey == "pos") {
                     if (ParsePoint3(val, posOverride)) {
                         hasPos = true;
-                    }
+                    } else throw std::runtime_error("Invalid position parameter.");
                     continue;
                 }
 
@@ -512,16 +511,15 @@ std::string NativeHandlers::CreateObject(const std::string& params, MCPBridgeGUP
             // If any PB2 param failed (e.g. PB1/legacy objects like Capsule, Hedra),
             // fall back to MAXScript to apply all params at once
             if (anyParamFailed) {
-                std::string nodeName = WideToUtf8(node->GetName());
-                std::string ms = "(";
+                std::string ms = "(local createdNode = getAnimByHandle " + std::to_string(NodeHandle(node)) + "; ";
                 for (auto& [key, val] : kvPairs) {
                     std::string lkey = key;
                     std::transform(lkey.begin(), lkey.end(), lkey.begin(), ::tolower);
                     if (lkey == "pos") continue; // handled separately
-                    ms += "$'" + JsonEscape(nodeName) + "'." + key + " = " + val + "; ";
+                    ms += "createdNode." + key + " = " + val + "; ";
                 }
                 ms += "\"OK\")";
-                try { RunMAXScript(ms); } catch (...) {}
+                RunMAXScript(ms); // A rejected parameter must cancel the dispatcher-owned hold.
             }
         }
 

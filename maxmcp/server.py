@@ -26,6 +26,7 @@ if __name__ == "__main__" and __spec__ is not None:
 _READ_ONLY_TOOLS = {
     "get_bridge_status",
     "get_plugin_capabilities",
+    "lighting_capabilities",
     "query_scene",
     "resolve_node_refs",
     "get_object_properties",
@@ -159,7 +160,9 @@ def _install_structured_tool_results() -> None:
     raw_tool = mcp.tool
     progressive_raw_tool = _progressive_mcp.tool
 
-    def registration_tool():
+    def registration_tool(fn):
+        if fn.__module__.endswith(".routing"):
+            return raw_tool
         return progressive_raw_tool if _tool_profile() == "progressive" else raw_tool
 
     def structured_tool(*decorator_args, **decorator_kwargs):
@@ -171,13 +174,13 @@ def _install_structured_tool_results() -> None:
                 before_call=client.clear_last_response,
                 transport_provider=client.get_last_transport,
             )
-            _register_raw_tool(registration_tool(), wrapped, annotations)
+            _register_raw_tool(registration_tool(fn), wrapped, annotations)
             return fn
 
         def decorate(fn):
             annotations = _tool_annotations(getattr(fn, "__name__", "") or "")
             raw_decorator = _raw_tool_decorator(
-                registration_tool(),
+                registration_tool(fn),
                 decorator_args,
                 decorator_kwargs,
                 annotations,
@@ -232,6 +235,8 @@ CORE_TOOL_MODULES = (
     "material_replace",
     "inspect",
     "plugins",
+    "plugin_edit",
+    "lighting",
     "organize",
     "viewport",
     "identify",
@@ -282,6 +287,7 @@ def _tool_profile() -> str:
 
 
 def _register_tool_modules() -> None:
+    import_module(".tools.routing", package=__package__)
     if _tool_profile() == "progressive":
         register_progressive_tools(
             public_mcp=mcp,
@@ -351,7 +357,7 @@ def max_assistant() -> str:
     )
     if _tool_profile() == "progressive":
         scene_call_rule = (
-            "This server uses the progressive tool profile. Only list_toolsets, "
+            "This server uses the progressive tool profile. Instance routing tools plus list_toolsets, "
             "describe_toolset, and call_tool are advertised.\n"
             "Use list_toolsets to choose a capability group, describe_toolset to load its exact "
             "schemas, then invoke the selected operational tool through call_tool. Never call a "

@@ -99,6 +99,9 @@ def _slim_transport(transport: dict[str, Any] | None) -> dict[str, Any] | None:
         slim["transport"] = transport["transport"]
     if transport.get("fallback_error"):
         slim["fallback_error"] = transport["fallback_error"]
+    for key in ("target_pid", "target_pipe", "target_source", "pinned"):
+        if key in transport:
+            slim[key] = transport[key]
     return slim or None
 
 
@@ -319,14 +322,14 @@ def _normalize_error(
     details: Any | None = None,
 ) -> dict[str, Any]:
     resolved = (
-        ErrorCode(code)
-        if isinstance(code, str) and code in ErrorCode._value2member_map_
-        else _classify_error_code(message, error_type)
+        code
+        if isinstance(code, str) and code.strip()
+        else _classify_error_code(message, error_type).value
     )
     error: dict[str, Any] = {
         "type": error_type,
         "message": message,
-        "code": resolved.value,
+        "code": resolved,
         "retryable": bool(retryable) if retryable is not None else resolved in _RETRYABLE_CODES,
     }
     if hint is not None:
@@ -399,7 +402,11 @@ def _error_from_exception(exc: BaseException) -> dict[str, Any]:
                 details=structured.get("details"),
             )
 
-    return _normalize_error(error_type=exc.__class__.__name__, message=str(exc))
+    return _normalize_error(
+        error_type=exc.__class__.__name__, message=str(exc),
+        code=getattr(exc, "code", None),
+        retryable=getattr(exc, "retryable", None),
+    )
 
 
 def _script_from_call(tool_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:

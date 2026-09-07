@@ -2,6 +2,7 @@ import json
 import os
 import re
 import tempfile
+from uuid import uuid4
 
 from ..helpers.native_compat import is_missing_native_route_error
 from ..max_client import MaxBridgeError
@@ -20,7 +21,7 @@ def _sanitize_filename(name: str) -> str:
 @mcp.tool()
 def isolate_and_capture_selected() -> str:
     """Capture isolated viewport screenshots of each selected object (resolves to top-level parents)."""
-    capture_dir = os.path.join(COMMS_DIR, "identify").replace("\\", "/")
+    capture_dir = os.path.join(COMMS_DIR, "identify", uuid4().hex).replace("\\", "/")
 
     if client.native_available:
         payload = json.dumps({"capture_dir": capture_dir})

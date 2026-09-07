@@ -481,7 +481,8 @@ void Descendants(INode* node, std::vector<INode*>& nodes) {
 
 Box3 Bounds(const json& p) {
     std::vector<INode*> nodes;
-    if (p.contains("frame_names") && !p.at("frame_names").empty()) {
+    const bool explicitNames=p.contains("frame_names") && !p.at("frame_names").empty();
+    if (explicitNames) {
         for (const auto& name : p.at("frame_names")) {
             if (name.type()!=json::value_t::string) throw std::runtime_error("frame_names must contain names");
             auto matches = CollectNodesByExactName(name.get<std::string>());
@@ -489,17 +490,32 @@ Box3 Bounds(const json& p) {
             Descendants(matches.front(),nodes);
         }
     } else CollectNodes(GetCOREInterface()->GetRootNode(),nodes);
-    Box3 box; box.Init();
+    Box3 box,rig; box.Init(); rig.Init();
     for (auto* node : nodes) {
         if (node->IsNodeHidden()) continue;
         auto* obj = node->EvalWorldState(GetCOREInterface()->GetTime()).obj;
         Get(); // Evaluation can pump UI messages and replace the owned viewport.
-        if (!obj || (obj->SuperClassID()!=GEOMOBJECT_CLASS_ID && obj->SuperClassID()!=SHAPE_CLASS_ID)) continue;
+        if (!obj) continue;
+        const auto sid=obj->SuperClassID();
+        if(sid==LIGHT_CLASS_ID||sid==CAMERA_CLASS_ID||sid==HELPER_CLASS_ID) {
+            // Deformation bounds often collapse light gizmos to a point. Ask
+            // the plugin for the bounds it actually displays in this viewport.
+            Box3 part; part.Init();
+            obj->GetWorldBoundBox(GetCOREInterface()->GetTime(),node,&Get(),part);
+            Get();
+            if(part.IsEmpty()) part+=node->GetNodeTM(GetCOREInterface()->GetTime()).GetTrans();
+            rig+=part;
+            continue;
+        }
+        if(sid!=GEOMOBJECT_CLASS_ID&&sid!=SHAPE_CLASS_ID) continue;
         Box3 part = SpatialSnapshot::WorldBoundingBox(node,GetCOREInterface()->GetTime());
         Get();
         if (!part.IsEmpty()) { box += part.Min(); box += part.Max(); }
     }
-    if (box.IsEmpty()) throw std::runtime_error("No visible geometry to frame");
+    // Keep ordinary frame-all focused on geometry, but support a light-only
+    // rig and explicit light/camera/helper targeting without dummy geometry.
+    if((explicitNames||box.IsEmpty())&&!rig.IsEmpty()) box+=rig;
+    if (box.IsEmpty()) throw std::runtime_error("No visible objects to frame");
     for (int i=0;i<3;++i) if (!std::isfinite(box.Min()[i]) || !std::isfinite(box.Max()[i]))
         throw std::runtime_error("Non-finite scene bounds");
     return box;

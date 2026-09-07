@@ -2,6 +2,7 @@ import json
 import math
 import os
 import tempfile
+from uuid import uuid4
 from typing import Any
 
 from ..server import mcp, client
@@ -99,7 +100,8 @@ def agent_viewport(
     briefly activates the panel in Max, then restores the user's view and focus.
     After open, set_viewport/capture_viewport/capture_multi_view use it by default.
     release hides only the owned panel. Closed/reconfigured panels fail explicitly.
-    frame fits frame_names and descendants, or all visible geometry if omitted.
+    frame fits named geometry, lights, cameras, helpers and descendants. Without
+    names it fits visible geometry, falling back to lights/cameras/helpers in a rig-only scene.
     orbit uses yaw/pitch degrees about the framing target; pan x/y are view-plane
     scene units; zoom factor<1 moves closer and >1 farther. ray uses normalized
     image x/y (0..1, top-left origin); pass the capture's view_token as expected_view.
@@ -452,7 +454,7 @@ def capture_viewport(
 
     if source=="agent": raise RuntimeError("AGENT VIEWPORT returned no capture; active view was not used")
 
-    capture_path = os.path.join(COMMS_DIR, "viewport_capture.png").replace("\\", "/")
+    capture_path = os.path.join(COMMS_DIR, f"viewport_{uuid4().hex}.png").replace("\\", "/")
     _capture_viewport_to_file(capture_path)
     return _image_file_result(
         capture_path,
@@ -523,7 +525,7 @@ def capture_screen(
     max_bytes = max(0, int(max_bytes))
     min_width = max(1, int(min_width))
 
-    capture_path = os.path.join(COMMS_DIR, "screen_capture.jpg").replace("\\", "/")
+    capture_path = os.path.join(COMMS_DIR, f"screen_{uuid4().hex}.jpg").replace("\\", "/")
     current_width = max_width
     _capture_fullscreen_to_file(capture_path, max_width=current_width, max_height=max_height)
     img_data = _read_image_bytes(capture_path)

@@ -11,6 +11,7 @@ namespace SceneJournal {
 void Register();
 void Unregister();
 void Reset();
+unsigned long long Epoch();
 
 bool IsRegistered();
 bool FlushPending();
