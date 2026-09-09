@@ -54,3 +54,7 @@ bundle/Contents/scripts/
 dev.bat
 native/dev.bat
 native/deploy.bat
+
+# Local additions
+/maxscript/find_goskin.ms
+bat_test3.log

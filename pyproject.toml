@@ -72,3 +72,7 @@ packages = ["maxmcp"]
 [project.scripts]
 3dsmax-mcp = "maxmcp.server:main"
 3dsmax-mcp-install = "maxmcp.installer:main"
+
+[[tool.uv.index]]
+name = "tencent"
+url = "https://mirrors.cloud.tencent.com/pypi/simple/"
