@@ -64,6 +64,27 @@ def manage_scene(action: str) -> str:
 
 
 @mcp.tool()
+def load_scene(file_path: str) -> str:
+    """Load a .max scene file into 3ds Max (replaces the current scene).
+
+    Delegates to the Max-side ``MCP_SceneManage.loadScene`` (see
+    maxscript/mcp_server.ms), which guards against missing files / newer file
+    versions and suppresses missing-XRefs & missing-external-files dialogs.
+
+    Args:
+        file_path: Absolute path to the .max file.
+    """
+    from ..helpers.maxscript import safe_value
+
+    fp = safe_value(file_path)
+    if not fp.startswith("@"):
+        fp = '@"' + fp.replace('"', '""') + '"'
+    maxscript = f"MCP_SceneManage.loadScene {fp}"
+    response = client.send_command(maxscript)
+    return response.get("result", "")
+
+
+@mcp.tool()
 def undo_last() -> str:
     """Undo the last 3ds Max scene operation."""
     if client.native_available:

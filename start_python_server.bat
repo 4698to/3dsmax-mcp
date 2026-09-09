@@ -21,11 +21,20 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem Resolve the LAN IP the MCP server is reachable at (fallback: 127.0.0.1).
-set "LOCAL_IP=127.0.0.1"
-for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.PrefixOrigin -ne 'WellKnown' } | Sort-Object InterfaceMetric | Select-Object -First 1 -ExpandProperty IPAddress)"`) do set "LOCAL_IP=%%i"
+rem Launch the MCP server over HTTP bound to 0.0.0.0 so MCP clients on the
+rem LAN can connect. Point your client at http://<this-ip>:8000/mcp
+rem (streamable-http). Override the port via MCP_HTTP_PORT if needed.
+set "MCP_TRANSPORT=streamable-http"
+set "MCP_HTTP_HOST=0.0.0.0"
+set "MCP_HTTP_PORT=8000"
 
-echo Starting MCP server (streamable-http, http://%LOCAL_IP%:8000/mcp)
+rem Show a reachable LAN IP in the hint below instead of 0.0.0.0.
+set "LOCAL_IP="
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1 -ExpandProperty IPAddress)"`) do set "LOCAL_IP=%%i"
+if "%LOCAL_IP%"=="" set "LOCAL_IP=0.0.0.0"
+
+echo Starting MCP server (HTTP, bound to %MCP_HTTP_HOST%:%MCP_HTTP_PORT%).
+echo Connect MCP clients to:  http://%LOCAL_IP%:%MCP_HTTP_PORT%/mcp
 echo Keep this window open while the server runs.
 echo.
 

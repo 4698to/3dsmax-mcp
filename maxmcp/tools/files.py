@@ -8,8 +8,10 @@ without base64 overhead through the MCP channel. All files live under
 absolute path directly (the Max sandbox itself can only read local files).
 """
 
+import json
 import os
 import uuid
+from base64 import b64decode, b64encode
 
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -161,9 +163,94 @@ def get_file_service_info() -> dict:
     base = _base_url()
     return {
         "base_url": base,
-        "workspace": WORKSPACE_DIR,  # local path on the 3ds Max server machine
+        "workspace": str(WORKSPACE_DIR),  # local path on the 3ds Max server machine
         "upload_url": f"{base}/files/upload",
         "list_url": f"{base}/files",
         "download_url_template": f"{base}/files/{{filename}}",
         "upload_method": "POST multipart form field 'file'",
     }
+
+
+# ── stdio-compatible transfer tools (base64 over the MCP channel) ────────────
+
+
+@mcp.tool()
+def workspace_upload(file_name: str, data_b64: str) -> str:
+    """Upload a file into the shared workspace (base64-encoded content).
+
+    Saves the decoded bytes to ``workspace`` on the 3ds Max machine and
+    returns the local absolute path, which Max scripts can read directly.
+    Works over any transport (stdio or HTTP); use ``get_file_service_info``
+    for the HTTP-only upload endpoint.
+
+    Args:
+        file_name: Target name in the workspace (basename is used).
+        data_b64: Base64-encoded file content.
+    """
+    _ensure_workspace()
+    safe = _sanitize_filename(file_name)
+    try:
+        raw = b64decode(data_b64, validate=True)
+    except Exception as exc:
+        raise ValueError(f"data_b64 is not valid base64: {exc}") from exc
+    dest = os.path.join(WORKSPACE_DIR, safe)
+    with open(dest, "wb") as fh:
+        fh.write(raw)
+    return json.dumps(
+        {
+            "name": safe,
+            "size": len(raw),
+            "local_path": dest,
+            "url": f"{_base_url()}/files/{safe}",
+        },
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool()
+def workspace_download(file_name: str) -> str:
+    """Download a workspace file as base64-encoded content.
+
+    Use this to fetch Max-generated results (renders, exports, ...) back to
+    the client. The file must already exist in ``workspace`` on the 3ds Max
+    machine (Max scripts can write there directly).
+
+    Args:
+        file_name: Name of the file in the workspace.
+    """
+    _ensure_workspace()
+    try:
+        path = _resolve_in_workspace(file_name)
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"{file_name!r} not found in workspace {WORKSPACE_DIR}")
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    return json.dumps(
+        {
+            "name": os.path.basename(path),
+            "size": len(raw),
+            "data_b64": b64encode(raw).decode("ascii"),
+        },
+        ensure_ascii=False,
+    )
+
+
+@mcp.tool()
+def workspace_list_files() -> str:
+    """List the files currently stored in the shared workspace."""
+    _ensure_workspace()
+    entries = []
+    for name in sorted(os.listdir(WORKSPACE_DIR)):
+        full = os.path.join(WORKSPACE_DIR, name)
+        if os.path.isfile(full):
+            entries.append(
+                {
+                    "name": name,
+                    "size": os.path.getsize(full),
+                    "local_path": full,
+                    "url": f"{_base_url()}/files/{name}",
+                }
+            )
+    return json.dumps({"workspace": str(WORKSPACE_DIR), "files": entries}, ensure_ascii=False)

@@ -12,12 +12,26 @@ from .tool_response import make_structured_tool
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-mcp = FastMCP("3dsmax-mcp")
+mcp = FastMCP(
+    "3dsmax-mcp",
+    # Used only when running with transport=streamable-http (MCP_TRANSPORT).
+    # stdio transport ignores these.
+    host=os.environ.get("MCP_HTTP_HOST", "0.0.0.0"),
+    port=int(os.environ.get("MCP_HTTP_PORT", "8000")),
+)
 # Operational tools loaded by the progressive profile live here.  This server
 # is never run, so its tools remain callable without being advertised by the
 # public MCP list_tools surface.
 _progressive_mcp = FastMCP("3dsmax-mcp-progressive-hidden")
 client = MaxClient()
+
+# Shared workspace for file transfer: client uploads land here, Max-side
+# scripts read/write these local paths directly. Overridable via MAXMCP_WORKSPACE.
+WORKSPACE_DIR = Path(
+    os.environ.get("MAXMCP_WORKSPACE")
+    or Path(os.environ.get("TEMP", ".")) / "3dsmax-mcp" / "workspace"
+)
+WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 if __name__ == "__main__" and __spec__ is not None:
     sys.modules.setdefault(__spec__.name, sys.modules[__name__])
@@ -241,6 +255,8 @@ CORE_TOOL_MODULES = (
     "viewport",
     "identify",
     "file_access",
+    "files",
+    "instances",
     "learning",
     "controllers",
     "keyframes",
@@ -396,7 +412,14 @@ def max_assistant() -> str:
 
 
 def main():
-    mcp.run(transport="stdio")
+    # Default: stdio (used by MCP clients such as Claude Desktop / Cursor).
+    # Set MCP_TRANSPORT=streamable-http to serve over HTTP; bind address and
+    # port come from MCP_HTTP_HOST / MCP_HTTP_PORT (see FastMCP settings above).
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "streamable-http":
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

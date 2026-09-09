@@ -18,6 +18,10 @@ than REGISTRY_TTL are considered gone. Only when no instance is discovered at
 all does the manager fall back to a single 127.0.0.1:8765 instance with
 implicit session binding (backwards compatible with the previous
 single-instance behavior).
+
+A background watcher thread applies the heartbeat TTL continuously: an instance
+is marked offline and dropped from the managed list (its lock released) as soon
+as its heartbeat expires, without waiting for the next tool call.
 """
 
 from __future__ import annotations
@@ -81,6 +85,7 @@ class IMaxInstance:
     name: str
     host: str
     port: int
+    max_version: Optional[int] = None  # e.g. 2022; None when unknown
     locked_by: Optional[object] = None  # MCP ServerSession currently holding it
     locked_at: Optional[float] = None  # time.monotonic() of acquisition
 
@@ -126,23 +131,74 @@ class InstanceManager:
     # Loading
     # ------------------------------------------------------------------ #
 
-    def _build(self, entries: list[tuple[str, int, str]]) -> None:
-        """Register parsed (host, port, name) entries. Caller holds self._lock."""
-        for host, port, name in entries:
+    def _build(self, entries: list[tuple[str, int, str, Optional[int]]]) -> None:
+        """Register parsed (host, port, name, max_version) entries. Caller holds self._lock."""
+        for host, port, name, max_version in entries:
             if any(i.name == name for i in self._instances):
                 raise ValueError(f"Duplicate instance name {name!r}")
-            self._instances.append(IMaxInstance(name=name, host=host, port=port))
+            self._instances.append(
+                IMaxInstance(name=name, host=host, port=port, max_version=max_version)
+            )
             self._clients[name] = MaxClient(host=host, port=port)
         logging.info(
             "InstanceManager loaded %d 3ds Max instance(s): %s",
             len(self._instances),
-            ", ".join(f"{i.name}={i.host}:{i.port}" for i in self._instances),
+            ", ".join(
+                f"{i.name}={i.host}:{i.port}"
+                + (f" (3ds Max {i.max_version})" if i.max_version else "")
+                for i in self._instances
+            ),
         )
+
+    def _read_registry_records_raw(self) -> list[dict[str, Any]]:
+        """Every parseable line of the registry file, fresh or stale.
+
+        Version lookup deliberately ignores the heartbeat TTL: the last version
+        a Max-side script recorded stays useful even after the instance went
+        idle. Never raises; on any failure returns [].
+        """
+        path = _default_registry_path()
+        try:
+            if not os.path.exists(path):
+                return []
+            found: list[dict[str, Any]] = []
+            with open(path, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        found.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+            return found
+        except OSError as exc:
+            logging.warning("Could not read registry file %s: %s", path, exc)
+            return []
+
+    def _registry_version_by_port(self) -> dict[int, int]:
+        """Latest recorded maxVersion per port from the registry file.
+
+        Lets explicitly-configured instances (MAXMCP_INSTANCES) still report
+        the 3ds Max version written by the running Max-side script. Never
+        raises; returns {} on any failure.
+        """
+        versions: dict[int, int] = {}
+        try:
+            for rec in self._read_registry_records_raw():
+                port = rec.get("port")
+                ver = rec.get("maxVersion")
+                if isinstance(port, int) and isinstance(ver, int):
+                    versions[port] = ver  # later lines win (most recent)
+        except Exception:
+            return {}
+        return versions
 
     def _load(self, spec: Optional[str]) -> None:
         with self._lock:
             if spec and spec.strip():
-                entries: list[tuple[str, int, str]] = []
+                versions = self._registry_version_by_port()
+                entries: list[tuple[str, int, str, Optional[int]]] = []
                 for idx, entry in enumerate(e.strip() for e in spec.split(",") if e.strip()):
                     parts = entry.split(":")
                     if len(parts) == 2:
@@ -157,7 +213,7 @@ class InstanceManager:
                         port = int(port_str)
                     except ValueError:
                         raise ValueError(f"Invalid port {port_str!r} for instance {name!r}")
-                    entries.append((host, port, name))
+                    entries.append((host, port, name, versions.get(port)))
                 self._build(entries)
                 return
 
@@ -167,7 +223,10 @@ class InstanceManager:
                 self._auto_bind = False
                 logging.info("Auto-discovered %d 3ds Max instance(s) from registry", len(discovered))
             else:
-                self._build([(DEFAULT_HOST, DEFAULT_PORT, "max1")])
+                # Fallback single instance: still report the version the Max-side
+                # script last recorded for this port (registry may be stale).
+                versions = self._registry_version_by_port()
+                self._build([(DEFAULT_HOST, DEFAULT_PORT, "max1", versions.get(DEFAULT_PORT))])
                 self._auto_bind = True
 
     def _find(self, name: str) -> Optional[IMaxInstance]:
@@ -204,20 +263,21 @@ class InstanceManager:
             logging.warning("Could not read registry file %s: %s", path, exc)
             return []
 
-    def _discover_registry_instances(self) -> list[tuple[str, int, str]]:
+    def _discover_registry_instances(self) -> list[tuple[str, int, str, Optional[int]]]:
         """Read auto-registered instances from the JSONL registry file.
 
         Returns fresh entries (heartbeat within REGISTRY_TTL) as
-        (host, port, name). Never raises; on any failure returns [] so the
-        caller can fall back.
+        (host, port, name, max_version). Never raises; on any failure returns
+        [] so the caller can fall back.
         """
-        found: list[tuple[str, int, str]] = []
+        found: list[tuple[str, int, str, Optional[int]]] = []
         for rec in self._read_registry_records():
             port = rec.get("port")
             if not isinstance(port, int):
                 continue
             name = rec.get("name") or f"max-{port}"
-            found.append(("127.0.0.1", port, name))
+            ver = rec.get("maxVersion")
+            found.append(("127.0.0.1", port, name, ver if isinstance(ver, int) else None))
         return found
 
     def refresh_registry(self) -> None:
@@ -250,18 +310,20 @@ class InstanceManager:
             current = {inst.name: inst for inst in self._instances}
             new_instances: list[IMaxInstance] = []
             seen: set[str] = set()
-            for host, port, name in discovered:
+            for host, port, name, max_version in discovered:
                 if name in seen:
                     continue
                 seen.add(name)
                 old = current.pop(name, None)
                 if old is not None and old.port == port:
+                    if max_version and old.max_version != max_version:
+                        old.max_version = max_version
                     new_instances.append(old)
                 else:
                     if old is not None and old.locked_by:
                         # Same name, different port (3ds Max restarted): drop old lock.
                         self._by_session.pop(old.locked_by, None)
-                    new_instances.append(IMaxInstance(name=name, host=host, port=port))
+                    new_instances.append(IMaxInstance(name=name, host=host, port=port, max_version=max_version))
                     self._clients[name] = MaxClient(host=host, port=port)
 
             for old in current.values():  # disappeared from registry
@@ -294,7 +356,9 @@ class InstanceManager:
             self._watcher.start()
 
     def _watch_loop(self) -> None:
-        """Poll every REGISTRY_POLL_SECONDS and log newly joined instances."""
+        """Poll every REGISTRY_POLL_SECONDS: announce newly joined instances and
+        mark instances offline once their heartbeat goes stale (no fresh registry
+        record within REGISTRY_TTL)."""
         known: dict[str, int] = {}  # instance name -> last seen port
         # Startup snapshot: instances already running before the Python server
         # started are announced too (otherwise a Max-first start would be silent).
@@ -324,9 +388,22 @@ class InstanceManager:
                         port,
                     )
                 known[name] = port
-            # Forget gone instances so a later re-join is announced again.
-            for gone in [n for n in known if n not in seen]:
-                known.pop(gone, None)
+            # Instances whose heartbeat expired are considered offline: drop
+            # them from the known set so a later re-join is announced again,
+            # and refresh the managed list so their locks are released and they
+            # no longer show up in list_instances/acquire. No need to wait for
+            # the next tool call.
+            gone = [n for n in known if n not in seen]
+            for name in gone:
+                logging.warning(
+                    "3ds Max instance %s stopped sending heartbeats (last seen "
+                    "port %s); considered offline",
+                    name,
+                    known[name],
+                )
+                known.pop(name, None)
+            if gone:
+                self.refresh_registry()
 
     def _describe(self, rec: dict[str, Any]) -> str:
         """Human-readable one-liner for a registry record."""
@@ -341,8 +418,11 @@ class InstanceManager:
         return f"{name} at 127.0.0.1:{port}{suffix}"
 
     def _announce_join(self, rec: dict[str, Any]) -> None:
-        """Log a banner for a freshly discovered instance."""
+        """Log a banner for a freshly discovered instance and fold it into
+        the managed instance list right away (so list_instances/acquire see
+        it with its version without waiting for the next explicit refresh)."""
         logging.info("New 3ds Max instance joined: %s", self._describe(rec))
+        self.refresh_registry()
 
     # ------------------------------------------------------------------ #
     # Lock lifecycle
@@ -527,6 +607,7 @@ class InstanceManager:
                     "name": inst.name,
                     "host": inst.host,
                     "port": inst.port,
+                    "max_version": inst.max_version,
                     "busy": inst.locked_by is not None,
                     "locked_by": _display(inst.locked_by) if inst.locked_by else None,
                     "locked_for_seconds": (
@@ -549,6 +630,7 @@ class InstanceManager:
                     "name": inst.name,
                     "host": inst.host,
                     "port": inst.port,
+                    "max_version": inst.max_version,
                     "acquired_for_seconds": (
                         round(time.monotonic() - inst.locked_at, 1) if inst.locked_at else 0.0
                     ),
