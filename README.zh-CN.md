@@ -92,6 +92,33 @@ uv run python install.py
 
 ---
 
+## 启动服务器（启动器与传输模式）
+
+仓库自带两个启动器，分别对应一种 MCP 传输方式：
+
+| 启动器 | 传输方式 | 适用场景 |
+|--------|----------|----------|
+| `start_python_server.bat` | `streamable-http` | 以 HTTP 绑定 `0.0.0.0:8000` 启动，局域网内的 MCP 客户端可直接连接。窗口会打印本机局域网 IP，例如 `http://192.168.x.x:8000/mcp`。 |
+| `start_python_server_stdio.bat` | `stdio` | 以 stdin/stdout 独立运行服务器。Claude Desktop、Cursor 等客户端通常自行拉起该模式；此启动器主要用于测试。 |
+
+两者都需要先执行一次 `install_deps.bat` 安装依赖，启动后需保持窗口不关闭。
+
+传输方式由环境变量 `MCP_TRANSPORT` 决定：`stdio`（默认）或 `streamable-http`。HTTP 模式下，`MCP_HTTP_HOST`（默认 `0.0.0.0`）和 `MCP_HTTP_PORT`（默认 `8000`）控制绑定地址与端口。
+
+把 MCP 客户端指向 HTTP 端点 `http://<ip>:8000/mcp`（把 `<ip>` 换成窗口打印的局域网 IP）：
+
+```json
+{
+  "mcpServers": {
+    "3dsmax-mcp": {
+      "url": "http://192.168.x.x:8000/mcp"
+    }
+  }
+}
+```
+
+---
+
 ## 配置 AI 客户端
 
 国内用户最常见的组合是 **Cline + DeepSeek**（VS Code 插件），下面以它为主。

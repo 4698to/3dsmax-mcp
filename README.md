@@ -49,6 +49,31 @@ uv run python install.py
 
 Each MCP process stays attached to the first Max instance it connects to. Use `list_max_instances`, `select_max_instance(pid)`, `get_selected_max_instance`, or `release_max_instance` to manage routing in any profile. `MCP_MAX_PID` and the existing `MCP_MAX_PIPE` support startup pinning. Starting or claiming another Max changes the default for unbound clients only.
 
+## Running the server (launchers & transports)
+
+The repository ships two launchers, one per MCP transport:
+
+| Launcher | Transport | When to use |
+|----------|-----------|-------------|
+| `start_python_server.bat` | `streamable-http` | Serve over HTTP bound to `0.0.0.0:8000` so MCP clients on your LAN can connect. The console prints the reachable LAN IP, e.g. `http://192.168.x.x:8000/mcp`. |
+| `start_python_server_stdio.bat` | `stdio` | Run the server standalone on stdin/stdout. MCP clients such as Claude Desktop and Cursor normally launch this mode themselves; this launcher is for testing. |
+
+Both require `uv` (run `install_deps.bat` once first) and keep their console window open while the server runs.
+
+The transport is selected by the `MCP_TRANSPORT` environment variable: `stdio` (default) or `streamable-http`. When serving over HTTP, `MCP_HTTP_HOST` (default `0.0.0.0`) and `MCP_HTTP_PORT` (default `8000`) control the bind address and port.
+
+Point an MCP client at the HTTP endpoint `http://<ip>:8000/mcp` (replace `<ip>` with the printed LAN IP):
+
+```json
+{
+  "mcpServers": {
+    "3dsmax-mcp": {
+      "url": "http://192.168.x.x:8000/mcp"
+    }
+  }
+}
+```
+
 ## Tools
 
 <details>

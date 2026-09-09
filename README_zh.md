@@ -151,11 +151,15 @@ python scripts/build_skill.py
 
 ### 2. 启动 Python 服务端（共享服务器）
 
+直接双击 `start_python_server.bat` 即可（HTTP 绑定 `0.0.0.0:8000`，窗口会打印本机局域网 IP）；或者手动运行：
+
 ```bash
 uv run --directory "C:\path\to\3dsmax-mcp" 3dsmax-mcp
 ```
 
 **无需设置 `MAXMCP_INSTANCES`** —— 服务器启动时会自动发现注册文件里所有存活的 3ds Max 实例，并持续刷新（新启动的实例自动加入，关闭的实例自动移除并释放其锁）。
+
+传输方式由环境变量 `MCP_TRANSPORT` 控制：`stdio`（默认）或 `streamable-http`；HTTP 模式可用 `MCP_HTTP_HOST`（默认 `0.0.0.0`）、`MCP_HTTP_PORT`（默认 `8000`）覆盖绑定地址与端口。`start_python_server_stdio.bat` 以 stdio 方式独立运行服务器，主要用于测试。
 
 如需手动指定（可选的旧方式）：
 
