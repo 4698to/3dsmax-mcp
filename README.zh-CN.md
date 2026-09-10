@@ -5,7 +5,7 @@
 用中文描述你要做的事，智能体通过专用 MCP 工具直接操作场景——创建物体、构建材质、驱动修改器与控制器、
 截取视口、检查插件。progressive 配置只公开三个发现/调用工具，再按需加载完整工具定义，避免一次性占用大量上下文。
 
-**当前版本：1.6.6 — Astra Edition** — 见 [CHANGELOG.md](docs/CHANGELOG.md)。
+**当前版本：1.6.7** — 见 [CHANGELOG.md](docs/CHANGELOG.md)。
 
 > English: [README.md](README.md)
 
@@ -13,6 +13,8 @@
 
 - **原生桥接（Native Bridge）** — C++ 插件，支持 3ds Max 2023–2027，无需 MAXScript 轮询
 - **运行时自省** — 可发现任意 Max 类、插件接口与参数，方便自动化与二次开发
+- **灯光工具链** — 渲染器无关的灯光发现、创建、检查与受控编辑，支持各渲染器专属发光体、输出单位与环境绑定（1.6.7 新增）
+- **插件自省 v2** — 精确身份、有界查询、声明式枚举与状态令牌，配合原子类型化 `plugin_patch` 修改插件（1.6.7 新增）
 - **深度插件支持** — tyFlow、Data Channel、MCG、OSL、Forest Pack、RailClone、Octane
 - **内置智能体技能包** — 附带 MAXScript 参考文档，便于你编写自己的工具
 
@@ -42,7 +44,7 @@ python -m pip install 3dsmax-mcp -i https://pypi.tuna.tsinghua.edu.cn/simple
 python -m maxmcp.installer
 ```
 
-安装程序会让你选择 MCP 工具配置，默认使用兼容性最好的 `full`。`progressive` 只公开三个发现/调用工具，可明显减少本地或较小模型的上下文占用。无人值守安装可使用 `3dsmax-mcp-install --tool-profile progressive`。
+安装程序会让你选择 MCP 工具配置，默认使用兼容性最好的 `full`。`progressive` 额外暴露实例路由控制（`list_max_instances` 等），再公开三个发现/调用工具，按需加载精确工具参数，可明显减少本地或较小模型的上下文占用。无人值守安装可使用 `3dsmax-mcp-install --tool-profile progressive`。
 **必须重启 3ds Max** 插件才会加载。
 
 > 其他可用镜像：阿里云 `https://mirrors.aliyun.com/pypi/simple/`、腾讯云 `https://mirrors.cloud.tencent.com/pypi/simple/`。
@@ -116,6 +118,71 @@ uv run python install.py
   }
 }
 ```
+
+每个 MCP 进程会保持绑定到它首先连接的那个 Max 实例。在任何配置下都可以用 `list_max_instances`、
+`select_max_instance(pid)`、`get_selected_max_instance`、`release_max_instance` 管理路由；
+`MCP_MAX_PID` 和已有的 `MCP_MAX_PIPE` 支持启动时固定目标。启动或占用另一个 Max 只会改变
+未绑定客户端的默认目标。
+
+---
+
+## 多人共享与多实例使用
+
+默认情况下，MCP 服务器与 3ds Max 都在本机运行（单用户）。也可以架设一台"共享服务器"，让局域网内的多人同时使用同一台或多台 3ds Max。
+
+### 架构
+
+- 一个 Python MCP 服务器进程，监听 `0.0.0.0:8000`（streamable-http 传输，见上文"启动服务器"）
+- 启动一个或多个 3ds Max 实例，每个实例独立运行 `maxscript/mcp_server.ms`，各自监听独立 TCP 端口
+- 每个用户通过自己的 MCP 客户端连接共享服务器，建立独立会话，互不干扰
+- 每个 3ds Max 实例**同一时刻只允许一个用户独占**使用；用户操作完成后必须显式释放，实例才会恢复空闲
+
+### 1. 启动 3ds Max 端（端口自动分配）
+
+在每个 3ds Max 中直接运行脚本即可，**无需任何配置**：
+
+- 第一个实例自动占用 8765，第二个自动占用 8766，依此类推（从 8765 起扫描第一个空闲端口）
+- 实例启动后把自己的端口（含 30 秒心跳）写入注册文件 `%LOCALAPPDATA%\3dsmax-mcp\instances.jsonl`，供 Python 端自动发现
+- 也可以显式指定端口：启动前设置环境变量 `MAXMCP_PORT=19001`（此时不做自动扫描）
+
+### 2. 启动 Python 服务端（共享服务器）
+
+直接双击 `start_python_server.bat` 即可（HTTP 绑定 `0.0.0.0:8000`，窗口会打印本机局域网 IP）。
+
+**无需设置 `MAXMCP_INSTANCES`** —— 服务器启动时会自动发现注册文件里所有存活的 3ds Max 实例，并持续刷新（新启动的实例自动加入，关闭的实例自动移除并释放其锁）。`MAXMCP_INSTANCES` 仅作为可选的旧式手动指定方式：
+
+```bash
+set MAXMCP_INSTANCES=127.0.0.1:8765:maxA,127.0.0.1:8766:maxB
+```
+
+### 3. 其他人如何连接（客户端配置）
+
+把 MCP 客户端的 URL 指向共享服务器的 IP（streamable-http 端点 `/mcp`），例如 `http://192.168.1.100:8000/mcp`。客户端配置的写法见上文"启动服务器"段的 JSON 示例；命令行代理可用：
+
+```bash
+claude mcp add --scope user 3dsmax-mcp --url http://192.168.1.100:8000/mcp
+```
+
+注意：
+
+- 将 `192.168.1.100` 替换为共享服务器的实际 IP
+- 服务器防火墙需放行 8000 端口
+
+### 4. 使用流程（实例生命周期）
+
+每个用户遵循"**获取 → 使用 → 释放**"三步：
+
+1. `list_instances` —— 查看有哪些实例、哪些空闲
+2. `acquire_instance` —— 独占一个空闲实例（可指定名字；不指定则自动分配）
+3. 正常调用场景工具（命令自动路由到该实例，其他用户无法同时使用它）
+4. `release_instance` —— 任务完成，明确释放实例，使其恢复空闲供他人使用
+
+规则与提示：
+
+- 一个实例同时只允许一个用户；其他人获取同一实例会收到 `busy` 错误，可改选空闲实例或等待
+- 未获取实例就调用场景工具，会提示先调用 `acquire_instance`
+- 会话意外断开时，遗留的锁会在 `MAXMCP_LOCK_TTL`（默认 1800 秒）后自动清理
+- 3ds Max 关闭后，其注册条目 90 秒内未收到心跳即视为离线，相关锁自动释放
 
 ---
 
@@ -304,8 +371,22 @@ core/full 仍可用于需要一次性公开全部参数的旧客户端。
 2023–2027。原生桥接插件为每个版本单独编译，安装脚本会自动匹配已安装的版本。
 
 **安全模式**
-`execute_maxscript` 默认受安全模式限制。配置文件位于
-`%LOCALAPPDATA%\3dsmax-mcp\mcp_config.ini`，详见 [docs/ADVANCED.md](docs/ADVANCED.md)。
+安全模式默认开启，`execute_maxscript` 等通道受其限制，用于阻止代理执行危险命令。以下命令会被拦截：
+
+| 被阻止 | 说明 |
+|--------|------|
+| `DOSCommand` / `hiddenDOSCommand` | shell / cmd 执行 |
+| `ShellLaunch` | 启动外部应用程序 |
+| `deleteFile` | 从磁盘删除文件 |
+| `python.Execute` | 在 3ds Max 内执行 Python |
+| `createFile` | 将新文件写入磁盘 |
+
+允许：所有场景操作（创建、修改、删除对象、材质、修改器）、`openFile` / `readLine` 读取文件、
+`getDir` / `getFiles` 列出目录与文件、`render` 渲染场景、`saveMaxFile` 保存 `.max` 文件、
+`gw.getViewportDib()` 视口捕获、`fileIn` 加载 MAXScript 文件。
+
+如需禁用，在配置文件 `%LOCALAPPDATA%\3dsmax-mcp\mcp_config.ini` 中设置 `safe_mode=false`。
+详见 [docs/ADVANCED.md](docs/ADVANCED.md)。
 
 **能自己加工具吗**
 可以。安装脚本会生成一个智能体技能包，内含 MAXScript 参考资料，专门用来指导 AI 写新工具。
