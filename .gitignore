@@ -18,7 +18,8 @@ nul
 cache/
 local/
 .env
-
+outputs/
+screenshots/
 # Live smoke run output (redirected stdout/stderr)
 smoke_out.json
 smoke_err.txt
@@ -58,3 +59,5 @@ native/deploy.bat
 # Local additions
 /maxscript/find_goskin.ms
 bat_test3.log
+debug.log
+listener_input.png
