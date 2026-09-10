@@ -568,12 +568,12 @@ struct MCPServerStruct
 			if transport == #native then
 			(
 				format "MCP: transport = native bridge; TCP fallback not started\n"
-				return()
+				return #native_only
 			)
 			if transport == #auto and nativeBridgeAvailable() then
 			(
 				format "MCP: transport = auto and native bridge detected; using native pipe (TCP not started)\n"
-				return()
+				return #native_only
 			)
 
 			-- Resolve bind address; fall back to 127.0.0.1 if invalid
@@ -620,7 +620,7 @@ struct MCPServerStruct
 				timer.Interval = idlePollIntervalMs
 				dotNet.setLifetimeControl timer #dotnet
 
-				dotNet.addEventHandler timer "Tick" onTick
+				dotNet.addEventHandler timer "Tick" this.onTick
 				timer.Start()
 
 				-- Heartbeat: keep this instance visible in the registry file
@@ -628,21 +628,24 @@ struct MCPServerStruct
 				heartbeatTimer.Interval = 30000  -- 30s heartbeat
 				dotNet.setLifetimeControl heartbeatTimer #dotnet
 
-				dotNet.addEventHandler heartbeatTimer "Tick" onHeartbeat
+				dotNet.addEventHandler heartbeatTimer "Tick" this.onHeartbeat
 				heartbeatTimer.Start()
 
 				writeRegistryLine()
 
 				format "MCP Server started (% on port %, idle poll % ms, active poll % ms)\n" bindAddr port idlePollIntervalMs activePollIntervalMs
+				#started
 			)
 			else
 			(
 				format "MCP: Failed to find a free port after % attempts\n" maxAttempts
+				#failed
 			)
 		)
 		else
 		(
 			format "MCP Server already running\n"
+			#already_running
 		)
 	),
 
@@ -700,6 +703,7 @@ if envPort != undefined and envPort.count > 0 then
 	local transportName = case MCP_Server.transport of (#tcp:"tcp"; #native:"native"; default:"auto")
 	local nativeAvailable = MCP_Server.nativeBridgeAvailable()
 	format "MCP: helpers loaded (safe_mode = %, transport = %, native bridge = %, tcp idle poll = % ms)\n" MCP_Server.safeMode transportName nativeAvailable MCP_Server.idlePollIntervalMs
+	format "MCP Commit :\n	MCP_Server.start()\n	MCP_Server.stop()\n	MCP_UI.show()\n"  
 )
 
 /*
@@ -903,6 +907,13 @@ MCP_SceneManage = SceneManageStruct()
 控制面板 (v2 移植 + 传输方式选择): 用户可自行选择 TCP / native bridge
 --------------------------------------------------------------------
 */
+-- UI 事件经全局函数中转: struct 方法直接传给 dotNet.addEventHandler 在个别
+-- 3ds Max 版本 / 启动方式下事件可能不触发, 全局函数值做委托转换最可靠
+global mcpUI_onModeChanged,mcpUI_onStartClick,mcpUI_onStopClick,mcpUI_onFormClosing
+fn mcpUI_onModeChanged sender args = (if MCP_UI != undefined do MCP_UI.onModeChanged sender args)
+fn mcpUI_onStartClick sender args = (if MCP_UI != undefined do MCP_UI.onStartClick sender args)
+fn mcpUI_onStopClick sender args = (if MCP_UI != undefined do MCP_UI.onStopClick sender args)
+fn mcpUI_onFormClosing sender args = (if MCP_UI != undefined do MCP_UI.onFormClosing sender args)
 struct MCPUIStruct
 (
 	form = undefined,
@@ -998,6 +1009,7 @@ struct MCPUIStruct
 
 	fn onStartClick sender args =
 	(
+		--format "MCP Server: onStartClick\n"
 		try (MCP_Server.bindIP = this.ipTextBox.Text) catch ()
 		try (MCP_Server.port = (this.portTextBox.Text as integer)) catch (MCP_Server.port = 8765)
 		MCP_Server.safeMode = this.safeCheckBox.Checked
@@ -1007,8 +1019,27 @@ struct MCPUIStruct
 			2: #native
 			default: #auto
 		)
-		MCP_Server.start()
-		this.updateStatus()
+		local result = #failed
+		try
+		(
+			result = MCP_Server.start()
+		)
+		catch
+		(
+			format "MCP UI: 启动失败: %\n" (getCurrentException())
+		)
+		case result of
+		(
+			#native_only:
+			(
+				-- 仅 Native Bridge: 不监听 TCP, 给出可见反馈而非看起来"没反应";
+				-- 保持"启动"可用, 便于改传输方式后再次启动
+				this.statusLabel.Text = "状态: 已启动 (Native Bridge, 未监听 TCP)"
+				this.startButton.Enabled = true
+				this.stopButton.Enabled = false
+			)
+			default: this.updateStatus()
+		)
 	),
 
 	fn onStopClick sender args =
@@ -1024,12 +1055,31 @@ struct MCPUIStruct
 		(
 			if MCP_Server != undefined and MCP_Server.isRunning do MCP_Server.stop()
 			args.Cancel = false
+			-- 窗体即将销毁(disposed): 清空引用, 下次 show() 重新创建
+			this.clearControls()
 		)
 		else
 		(
 			args.Cancel = true
 			this.form.Hide()
 		)
+	),
+
+	-- 清空全部控件引用: 窗体已销毁 / 创建失败后重置, 保证下次 show() 完整重建
+	fn clearControls =
+	(
+		this.form = undefined
+		this.transportCombo = undefined
+		this.modeCombo = undefined
+		this.ipTextBox = undefined
+		this.portTextBox = undefined
+		this.safeCheckBox = undefined
+		this.closeStopCheckBox = undefined
+		this.startButton = undefined
+		this.stopButton = undefined
+		this.statusLabel = undefined
+		this.localIpLabel = undefined
+		this.hintLabel = undefined
 	),
 
 	-- 创建面板控件 (重复调用只创建一次)
@@ -1173,11 +1223,12 @@ struct MCPUIStruct
 			this.hintLabel.Size = dotNetObject "System.Drawing.Size" 336 22
 			this.form.Controls.Add this.hintLabel
 
-			-- 事件
-			dotNet.addEventHandler this.modeCombo "SelectedIndexChanged" this.onModeChanged
-			dotNet.addEventHandler this.startButton "Click" this.onStartClick
-			dotNet.addEventHandler this.stopButton "Click" this.onStopClick
-			dotNet.addEventHandler this.form "FormClosing" this.onFormClosing
+			-- 事件: 经全局派发函数中转, 避免 struct 方法直接作为 .NET 事件处理器
+			-- 在个别 3ds Max 版本 / 启动方式下 Click 等事件不触发的问题
+			dotNet.addEventHandler this.modeCombo "SelectedIndexChanged" mcpUI_onModeChanged
+			dotNet.addEventHandler this.startButton "Click" mcpUI_onStartClick
+			dotNet.addEventHandler this.stopButton "Click" mcpUI_onStopClick
+			dotNet.addEventHandler this.form "FormClosing" mcpUI_onFormClosing
 
 			-- 初始: 传输方式与当前配置一致, 本地模式
 			this.transportCombo.SelectedIndex = case (if MCP_Server != undefined then MCP_Server.transport else #auto) of
@@ -1192,23 +1243,14 @@ struct MCPUIStruct
 		(
 			format "MCP UI: 创建界面失败: %\n" (getCurrentException())
 			-- 重置全部控件, 下次 show() 会重新创建, 避免半初始化残留导致二次报错
-			this.form = undefined
-			this.transportCombo = undefined
-			this.modeCombo = undefined
-			this.ipTextBox = undefined
-			this.portTextBox = undefined
-			this.safeCheckBox = undefined
-			this.closeStopCheckBox = undefined
-			this.startButton = undefined
-			this.stopButton = undefined
-			this.statusLabel = undefined
-			this.localIpLabel = undefined
-			this.hintLabel = undefined
+			this.clearControls()
 		)
 	),
 
 	fn show =
 	(
+		-- 窗体若已被销毁(disposed), 先清空引用, 让 createUI 重建
+		if this.form != undefined and this.form.IsDisposed do this.clearControls()
 		this.createUI()
 		if this.form == undefined then return()
 		this.updateStatus()
