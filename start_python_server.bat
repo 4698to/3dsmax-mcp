@@ -29,8 +29,10 @@ set "MCP_HTTP_HOST=0.0.0.0"
 set "MCP_HTTP_PORT=8000"
 
 rem Show a reachable LAN IP in the hint below instead of 0.0.0.0.
+rem Prefer the interface that owns the default route (the real NIC), so
+rem virtual adapters (WSL / Hyper-V / VPN tunnels) are not picked up.
 set "LOCAL_IP="
-for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 -AddressState Preferred -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1 -ExpandProperty IPAddress)"`) do set "LOCAL_IP=%%i"
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "$r = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1; if ($r) { (Get-NetIPAddress -InterfaceIndex $r.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1 -ExpandProperty IPAddress) }"`) do set "LOCAL_IP=%%i"
 if "%LOCAL_IP%"=="" set "LOCAL_IP=0.0.0.0"
 
 echo Starting MCP server (HTTP, bound to %MCP_HTTP_HOST%:%MCP_HTTP_PORT%).
