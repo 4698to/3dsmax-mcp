@@ -25,10 +25,16 @@ global MCP_NativePipeRunning
 global MCP_SceneManage
 global MCP_UI
 
+-- .NET 事件经全局函数中转: struct 方法直接传给 dotNet.addEventHandler 在个别
+-- 3ds Max 版本 / 启动方式下事件可能不触发(委托易被 GC 回收), 全局函数委托最可靠
+global mcpServer_onTick, mcpServer_onHeartbeat
+fn mcpServer_onTick sender args = (if MCP_Server != undefined do MCP_Server.onTick sender args)
+fn mcpServer_onHeartbeat sender args = (if MCP_Server != undefined do MCP_Server.onHeartbeat sender args)
+
 struct MCPServerStruct
 (
 	timer = undefined,
-	listener = undefined,
+	tcpListener = undefined,
 	isRunning = false,
 	port = 8765,
 	bindIP = "127.0.0.1",
@@ -65,14 +71,14 @@ struct MCPServerStruct
 	fn loadConfigString key defaultValue =
 	(
 		local val = defaultValue
-		try (val = getINISetting (configPath()) "mcp" key) catch ()
+		try (val = getINISetting (this.configPath()) "mcp" key) catch ()
 		if val == "" do val = defaultValue
 		val
 	),
 
 	fn loadConfigInt key defaultValue minValue maxValue =
 	(
-		local raw = loadConfigString key (defaultValue as string)
+		local raw = this.loadConfigString key (defaultValue as string)
 		local parsed = defaultValue
 		try (parsed = raw as integer) catch (parsed = defaultValue)
 		if parsed < minValue do parsed = minValue
@@ -83,7 +89,7 @@ struct MCPServerStruct
 	-- Load shared config from %LOCALAPPDATA%\3dsmax-mcp\mcp_config.ini
 	fn loadSafeMode =
 	(
-		local val = loadConfigString "safe_mode" "true"
+		local val = this.loadConfigString "safe_mode" "true"
 		if val == "" do val = "true"
 		val = toLower (trimLeft (trimRight val))
 		not (val == "false" or val == "0" or val == "off")
@@ -91,13 +97,13 @@ struct MCPServerStruct
 
 	fn loadConfig =
 	(
-		safeMode = loadSafeMode()
-		idlePollIntervalMs = loadConfigInt "tcp_idle_poll_interval_ms" idlePollIntervalMs 250 60000
-		activePollIntervalMs = loadConfigInt "tcp_active_poll_interval_ms" activePollIntervalMs 10 5000
-		activePollTicksAfterRequest = loadConfigInt "tcp_active_poll_ticks_after_request" activePollTicksAfterRequest 0 1000
+		this.safeMode = this.loadSafeMode()
+		this.idlePollIntervalMs = this.loadConfigInt "tcp_idle_poll_interval_ms" this.idlePollIntervalMs 250 60000
+		this.activePollIntervalMs = this.loadConfigInt "tcp_active_poll_interval_ms" this.activePollIntervalMs 10 5000
+		this.activePollTicksAfterRequest = this.loadConfigInt "tcp_active_poll_ticks_after_request" this.activePollTicksAfterRequest 0 1000
 		-- transport: auto (native preferred) | tcp | native
-		local t = toLower (loadConfigString "transport" "auto")
-		transport = case t of
+		local t = toLower (this.loadConfigString "transport" "auto")
+		this.transport = case t of
 		(
 			"tcp": #tcp
 			"native": #native
@@ -163,11 +169,11 @@ struct MCPServerStruct
 	-- Build a JSON response string
 	fn buildResponse success result errorMsg requestId:"" startedAt:0 cmdType:"maxscript" =
 	(
-		local safeResult = escapeJsonString (if result != undefined then (result as string) else "")
-		local safeError = escapeJsonString errorMsg
+		local safeResult = this.escapeJsonString (if result != undefined then (result as string) else "")
+		local safeError = this.escapeJsonString errorMsg
 		local successStr = if success then "true" else "false"
-		local safeReqId = escapeJsonString requestId
-		local safeCmdType = escapeJsonString cmdType
+		local safeReqId = this.escapeJsonString requestId
+		local safeCmdType = this.escapeJsonString cmdType
 		local reqField = if requestId != "" then ("\"" + safeReqId + "\"") else "null"
 		local durationMs = amax #(0, (timeStamp() - startedAt))
 
@@ -177,9 +183,9 @@ struct MCPServerStruct
 			"\"result\":\"" + safeResult + "\"," + \
 			"\"error\":\"" + safeError + "\"," + \
 			"\"meta\":{" + \
-				"\"protocolVersion\":" + (protocolVersion as string) + "," + \
+				"\"protocolVersion\":" + (this.protocolVersion as string) + "," + \
 				"\"cmdType\":\"" + safeCmdType + "\"," + \
-				"\"safeMode\":" + (if safeMode then "true" else "false") + "," + \
+				"\"safeMode\":" + (if this.safeMode then "true" else "false") + "," + \
 				"\"durationMs\":" + (durationMs as string) + \
 			"}" + \
 		"}"
@@ -221,7 +227,7 @@ struct MCPServerStruct
 					else if nextChar == "u" and pos + 5 <= jsonStr.count then
 					(
 						local hexStr = substring jsonStr (pos + 2) 4
-						local codepoint = hexToInt hexStr
+						local codepoint = this.hexToInt hexStr
 						if codepoint > 0 then
 						(
 							if codepoint <= 255 then
@@ -271,7 +277,7 @@ struct MCPServerStruct
 	(
 		try
 		(
-			local p = registryPath()
+			local p = this.registryPath()
 			local dir = (dotNetClass "System.IO.Path").GetDirectoryName p
 			if not (dotNetClass "System.IO.Directory").Exists dir do
 				(dotNetClass "System.IO.Directory").CreateDirectory dir
@@ -280,7 +286,7 @@ struct MCPServerStruct
 			local mv = maxVersion()
 			local maxYear = ((1998 + ((if mv.count != undefined then mv[1] else mv) / 1000)) as integer) as string
 			local hostStr = "127.0.0.1"
-			if bindIP != undefined and (bindIP as string).count > 0 do hostStr = (bindIP as string)
+			if this.bindIP != undefined and (this.bindIP as string).count > 0 do hostStr = (this.bindIP as string)
 			-- Unix timestamp: computed manually for .NET < 4.6 (3ds Max 2015)
 			local epoch = dotNetObject "System.DateTime" 1970 1 1 0 0 0 0
 			local now = (((dotNetClass "System.DateTime").UtcNow.Subtract epoch).TotalSeconds as integer) as string
@@ -294,14 +300,14 @@ struct MCPServerStruct
 					local line = readLine f
 					if line.count > 0 do
 					(
-						local existingPid = extractJsonValue line "pid"
+						local existingPid = this.extractJsonValue line "pid"
 						if existingPid != pid do append lines line
 					)
 				)
 				close f
 			)
-			append lines ("{\"host\":\"" + hostStr + "\",\"port\":" + (port as string) + \
-				",\"pid\":" + pid + ",\"name\":\"max-" + (port as string) + \
+			append lines ("{\"host\":\"" + hostStr + "\",\"port\":" + (MCP_Server.port as string) + \
+				",\"pid\":" + pid + ",\"name\":\"max-" + (MCP_Server.port as string) + \
 				"\",\"maxVersion\":" + maxYear + ",\"lastSeen\":" + now + "}")
 
 			local out = createFile p
@@ -322,7 +328,7 @@ struct MCPServerStruct
 	(
 		try
 		(
-			local p = registryPath()
+			local p = this.registryPath()
 			if not (dotNetClass "System.IO.File").Exists p then return()
 
 			local pid = ((dotNetClass "System.Diagnostics.Process").GetCurrentProcess()).Id as string
@@ -335,7 +341,7 @@ struct MCPServerStruct
 					local line = readLine f
 					if line.count > 0 do
 					(
-						local existingPid = extractJsonValue line "pid"
+						local existingPid = this.extractJsonValue line "pid"
 						if existingPid != pid do append lines line
 					)
 				)
@@ -375,21 +381,21 @@ struct MCPServerStruct
 
 		try
 		(
-			local command = extractJsonValue jsonString "command"
-			local cmdType = extractJsonValue jsonString "type"
-			local requestId = extractJsonValue jsonString "requestId"
+			local command = this.extractJsonValue jsonString "command"
+			local cmdType = this.extractJsonValue jsonString "type"
+			local requestId = this.extractJsonValue jsonString "requestId"
 
 			if cmdType == "" do cmdType = "maxscript"
 
 			if cmdType != "ping" and command == "" then
 			(
-				return (buildResponse false undefined "Empty command" requestId:requestId startedAt:startedAt cmdType:cmdType)
+				return (this.buildResponse false undefined "Empty command" requestId:requestId startedAt:startedAt cmdType:cmdType)
 			)
 
 			local result = undefined
 			local success = true
 			local errorMsg = ""
-			local savedSafeMode = safeMode
+			local savedSafeMode = this.safeMode
 
 			try
 			(
@@ -399,18 +405,18 @@ struct MCPServerStruct
 					local rendererName = try ((classOf renderers.current) as string) catch "unknown"
 					result = "{\"pong\":true" + \
 						",\"server\":\"3dsmax-mcp\"" + \
-						",\"protocolVersion\":" + (protocolVersion as string) + \
-						",\"bindIP\":\"" + (escapeJsonString bindIP) + "\"" + \
+						",\"protocolVersion\":" + (this.protocolVersion as string) + \
+						",\"bindIP\":\"" + (this.escapeJsonString this.bindIP) + "\"" + \
 						",\"maxVersion\":" + (maxYear as string) + \
-						",\"renderer\":\"" + (escapeJsonString rendererName) + "\"" + \
+						",\"renderer\":\"" + (this.escapeJsonString rendererName) + "\"" + \
 						",\"objectCount\":" + (objects.count as string) + \
 						",\"selectionCount\":" + (selection.count as string) + \
-						",\"safeMode\":" + (if safeMode then "true" else "false") + \
-						",\"port\":" + (port as string) + "}"
+						",\"safeMode\":" + (if this.safeMode then "true" else "false") + \
+						",\"port\":" + (MCP_Server.port as string) + "}"
 				)
 				else if cmdType == "maxscript" then
 				(
-					if safeMode then
+					if this.safeMode then
 					(
 						-- Block dangerous commands
 						local lowerCmd = toLower command
@@ -431,7 +437,7 @@ struct MCPServerStruct
 				)
 				else if cmdType == "python" then
 				(
-					if safeMode then
+					if this.safeMode then
 					(
 						success = false
 						errorMsg = "Python execution blocked by safe mode"
@@ -455,13 +461,13 @@ struct MCPServerStruct
 			)
 
 			-- Restore safeMode so commands cannot tamper with it
-			safeMode = savedSafeMode
+			this.safeMode = savedSafeMode
 
-			response = buildResponse success result errorMsg requestId:requestId startedAt:startedAt cmdType:cmdType
+			response = this.buildResponse success result errorMsg requestId:requestId startedAt:startedAt cmdType:cmdType
 		)
 		catch
 		(
-			response = buildResponse false undefined ("Parse error: " + (getCurrentException())) startedAt:startedAt
+			response = this.buildResponse false undefined ("Parse error: " + (getCurrentException())) startedAt:startedAt
 		)
 
 		response
@@ -473,6 +479,9 @@ struct MCPServerStruct
 		try
 		(
 			stream = client.GetStream()
+			-- Prevent permanent wedging: a dead/stuck client must not block
+			-- the poll loop (and the whole MAXScript main thread) forever.
+			try (stream.ReadTimeout = 10000) catch ()
 			reader = dotNetObject "System.IO.StreamReader" stream
 			writer = dotNetObject "System.IO.StreamWriter" stream
 
@@ -487,7 +496,7 @@ struct MCPServerStruct
 			if requestStr != undefined and requestStr.count > 0 then
 			(
 				-- Process and send response
-				responseStr = processRequest requestStr
+				responseStr = this.processRequest requestStr
 				format "MCP: Sending response: %\n" responseStr
 				writer.WriteLine responseStr
 				writer.Flush()
@@ -510,26 +519,37 @@ struct MCPServerStruct
 
 	fn setPollInterval intervalMs =
 	(
-		if timer != undefined and timer.Interval != intervalMs do timer.Interval = intervalMs
+		if this.timer != undefined and this.timer.Interval != intervalMs do this.timer.Interval = intervalMs
 	),
 
 	fn armActivePolling =
 	(
-		activePollTicksRemaining = activePollTicksAfterRequest
-		setPollInterval activePollIntervalMs
+		this.activePollTicksRemaining = this.activePollTicksAfterRequest
+		this.setPollInterval this.activePollIntervalMs
 	),
 
 	fn decayPolling =
 	(
-		if activePollTicksRemaining > 0 then
+		if this.activePollTicksRemaining > 0 then
 		(
-			activePollTicksRemaining -= 1
-			if activePollTicksRemaining <= 0 do setPollInterval idlePollIntervalMs
+			this.activePollTicksRemaining -= 1
+			if this.activePollTicksRemaining <= 0 do this.setPollInterval this.idlePollIntervalMs
 		)
 		else
 		(
-			setPollInterval idlePollIntervalMs
+			this.setPollInterval this.idlePollIntervalMs
 		)
+	),
+
+	-- 3ds Max 2015 exposes TcpListener.Pending() as a callable method; call it directly.
+	fn hasPending =
+	(
+		local pending = false
+		try (pending = MCP_Server.tcpListener.Pending()) catch (
+			format "MCP: TcpListener.Pending() error: %\n" (getCurrentException())
+			pending = false
+		)
+		pending
 	),
 
 	-- Timer tick: check for pending connections
@@ -539,11 +559,12 @@ struct MCPServerStruct
 
 		try
 		(
-			-- Check if there's a pending connection (non-blocking)
-			if MCP_Server.listener.Pending() then
+			-- Non-blocking connection check via TcpListener.Pending() (a
+			-- callable method on the Max 2015 bridge, unlike property access).
+			if MCP_Server.hasPending() then
 			(
 				MCP_Server.armActivePolling()
-				client = MCP_Server.listener.AcceptTcpClient()
+				local client = MCP_Server.tcpListener.AcceptTcpClient()
 				MCP_Server.handleClient client
 			)
 			else
@@ -563,14 +584,14 @@ struct MCPServerStruct
 	--   #native -> never start TCP, rely on the native bridge only
 	fn start =
 	(
-		if not isRunning then
+		if not MCP_Server.isRunning then
 		(
-			if transport == #native then
+			if this.transport == #native then
 			(
 				format "MCP: transport = native bridge; TCP fallback not started\n"
 				return #native_only
 			)
-			if transport == #auto and nativeBridgeAvailable() then
+			if this.transport == #auto and this.nativeBridgeAvailable() then
 			(
 				format "MCP: transport = auto and native bridge detected; using native pipe (TCP not started)\n"
 				return #native_only
@@ -580,60 +601,68 @@ struct MCPServerStruct
 			local bindAddr = "127.0.0.1"
 			try
 			(
-				if bindIP != undefined and (bindIP as string).count > 0 do
+				if MCP_Server.bindIP != undefined and (MCP_Server.bindIP as string).count > 0 do
 				(
-					local ip = (dotNetClass "System.Net.IPAddress").Parse (bindIP as string)
+					local ip = (dotNetClass "System.Net.IPAddress").Parse (MCP_Server.bindIP as string)
 					bindAddr = ip.ToString()
 				)
 			)
 			catch
 			(
-				format "MCP: invalid bind IP '%' - fallback to 127.0.0.1\n" bindIP
+				format "MCP: invalid bind IP '%' - fallback to 127.0.0.1\n" MCP_Server.bindIP
 				bindAddr = "127.0.0.1"
 			)
-			bindIP = bindAddr
+			MCP_Server.bindIP = bindAddr
 
 			local maxAttempts = 100
 			local attempt = 0
-			while not isRunning and attempt < maxAttempts do
+			while not MCP_Server.isRunning and attempt < maxAttempts do
 			(
 				attempt += 1
 				try
 				(
-					-- Create TCP listener
-					ipAddress = (dotNetClass "System.Net.IPAddress").Parse bindAddr
-					listener = dotNetObject "System.Net.Sockets.TcpListener" ipAddress port
-					listener.Start()
-					isRunning = true
+					-- Create the TCP listener with the single-arg (IPEndPoint)
+					-- constructor: IPEndPoint construction is verified working in
+					-- Max 2015, and one untyped argument resolves unambiguously.
+					-- (Direct multi-arg construction and Object[] indexing both
+					-- fail on the 2015 bridge, so avoid both.)
+					local ipAddress = (dotNetClass "System.Net.IPAddress").Parse bindAddr
+					local ipEndPoint = dotNetObject "System.Net.IPEndPoint" ipAddress MCP_Server.port
+					MCP_Server.tcpListener = dotNetObject "System.Net.Sockets.TcpListener" ipEndPoint
+					dotNet.setLifetimeControl MCP_Server.tcpListener #mxs  -- keep listener alive; #dotnet would let GC close the socket
+					MCP_Server.tcpListener.Start()
+					MCP_Server.isRunning = true
 				)
 				catch
 				(
-					listener = undefined
-					port += 1
+					format "MCP: listener create failed (attempt %): %\n" attempt (getCurrentException())
+					try (MCP_Server.tcpListener.Stop()) catch ()
+					MCP_Server.tcpListener = undefined
+					MCP_Server.port += 1
 				)
 			)
 
-			if isRunning then
+			if MCP_Server.isRunning then
 			(
 				-- Create a sparse idle timer for the opt-in TCP fallback.
-				timer = dotNetObject "System.Windows.Forms.Timer"
-				timer.Interval = idlePollIntervalMs
-				dotNet.setLifetimeControl timer #dotnet
+				this.timer = dotNetObject "System.Windows.Forms.Timer"
+				this.timer.Interval = this.idlePollIntervalMs
+				dotNet.setLifetimeControl this.timer #dotnet
 
-				dotNet.addEventHandler timer "Tick" this.onTick
-				timer.Start()
+				dotNet.addEventHandler this.timer "Tick" mcpServer_onTick
+				this.timer.Start()
 
 				-- Heartbeat: keep this instance visible in the registry file
-				heartbeatTimer = dotNetObject "System.Windows.Forms.Timer"
-				heartbeatTimer.Interval = 30000  -- 30s heartbeat
-				dotNet.setLifetimeControl heartbeatTimer #dotnet
+				this.heartbeatTimer = dotNetObject "System.Windows.Forms.Timer"
+				this.heartbeatTimer.Interval = 30000  -- 30s heartbeat
+				dotNet.setLifetimeControl this.heartbeatTimer #dotnet
 
-				dotNet.addEventHandler heartbeatTimer "Tick" this.onHeartbeat
-				heartbeatTimer.Start()
+				dotNet.addEventHandler this.heartbeatTimer "Tick" mcpServer_onHeartbeat
+				this.heartbeatTimer.Start()
 
-				writeRegistryLine()
+				MCP_Server.writeRegistryLine()
 
-				format "MCP Server started (% on port %, idle poll % ms, active poll % ms)\n" bindAddr port idlePollIntervalMs activePollIntervalMs
+				format "MCP Server started (% on port %, idle poll % ms, active poll % ms)\n" bindAddr MCP_Server.port this.idlePollIntervalMs this.activePollIntervalMs
 				#started
 			)
 			else
@@ -652,15 +681,15 @@ struct MCPServerStruct
 	-- Stop the server
 	fn stop =
 	(
-		if isRunning then
+		if MCP_Server.isRunning then
 		(
-			try (timer.Stop()) catch ()
-			try (dotNet.removeAllEventHandlers timer) catch ()
-			try (heartbeatTimer.Stop()) catch ()
-			try (dotNet.removeAllEventHandlers heartbeatTimer) catch ()
-			try (listener.Stop()) catch ()
-			isRunning = false
-			removeRegistryLine()
+			try (this.timer.Stop()) catch ()
+			try (dotNet.removeAllEventHandlers this.timer) catch ()
+			try (this.heartbeatTimer.Stop()) catch ()
+			try (dotNet.removeAllEventHandlers this.heartbeatTimer) catch ()
+			try (this.tcpListener.Stop()) catch ()
+			MCP_Server.isRunning = false
+			MCP_Server.removeRegistryLine()
 			format "MCP Server stopped\n"
 		)
 		else
@@ -672,8 +701,8 @@ struct MCPServerStruct
 	-- Restart the server
 	fn restart =
 	(
-		stop()
-		start()
+		this.stop()
+		this.start()
 	)
 )
 
