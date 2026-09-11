@@ -427,17 +427,36 @@ def focus_goskin_list_slot(
     vendor_pattern: str = VENDOR_PATTERN,
     ocr_base: str = DEFAULT_OCR_BASE,
     required: bool = True,
+    prefer_placeholder: bool = True,
 ) -> dict[str, Any]:
     """Click the global-skin list slot before 选定.
 
     Must click 「(选中后在编辑区添加)」 (or an existing ``模型：N`` row) so GoSkin
     knows which list entry receives the scene selection. Skipping this and
     clicking 选定 triggers a blocking warning dialog.
+
+    ``prefer_placeholder=True`` (before first 选定): try empty-slot text first.
+    ``prefer_placeholder=False`` (after mesh added): try ``模型：`` row first.
     """
     client = _ensure_max_client(client)
     ensure_dialog_monitor_loaded(client)
 
-    for needle in ("(选中后在编辑区添加)", "选中后在编辑区添加", "模型："):
+    if prefer_placeholder:
+        needles = (
+            "(选中后在编辑区添加)",
+            "选中后在编辑区添加",
+            "模型：",
+            "模型:",
+        )
+    else:
+        needles = (
+            "模型：",
+            "模型:",
+            "(选中后在编辑区添加)",
+            "选中后在编辑区添加",
+        )
+
+    for needle in needles:
         r = click_dialog_button(
             needle,
             title_pattern=title_pattern,
@@ -778,8 +797,10 @@ def run_goskin_skin(
     """Global-skin mouse flow with cleanup, selection guards, and OCR checks.
 
     Order (do not reorder):
-      cleanup(清空) if dirty → select mesh → 选定(模型行) → focus 模型：N
-      → select bones → 选定(关节行) → pause for user confirm → [optional] 开始蒙皮
+      dismiss warnings → cleanup(清空) if dirty
+      → click list slot「(选中后在编辑区添加)」→ select mesh → 选定(模型行)
+      → focus 模型：N → select bones → 选定(关节行)
+      → pause for user confirm → [optional] 开始蒙皮
 
     Default ``click_start=False``: returns ``confirmation`` summary and does NOT
     click 「开始蒙皮」. After the user agrees, call ``confirm_goskin_start(user_confirmed=True)``.
@@ -787,6 +808,9 @@ def run_goskin_skin(
     client = _ensure_max_client(client)
     ensure_dialog_monitor_loaded(client)
     steps: dict[str, Any] = {}
+
+    # Leftover warning from a prior bad 选定 covers GoSkin and breaks OCR/clicks.
+    steps["dismiss_warnings"] = dismiss_goskin_warnings(client, ocr_base=ocr_base)
 
     # ----- Cleanup leftover list/edit content before adding -----
     if auto_cleanup:
@@ -799,6 +823,18 @@ def run_goskin_skin(
         steps["cleanup"] = cleaned
         if not cleaned.get("ok"):
             return {"ok": False, "steps": steps, "error": cleaned.get("error")}
+
+    # ----- List slot MUST be focused before 选定 (else GoSkin warning modal) -----
+    slot = focus_goskin_list_slot(
+        client,
+        title_pattern=title_pattern,
+        vendor_pattern=vendor_pattern,
+        ocr_base=ocr_base,
+        required=True,
+    )
+    steps["focus_list_slot"] = slot
+    if not slot.get("ok"):
+        return {"ok": False, "steps": steps, "error": slot.get("error")}
 
     # ----- Step 1: mesh -----
     sel_mesh = _require_selection(client, names=mesh_names, role="mesh")
@@ -822,6 +858,7 @@ def run_goskin_skin(
         "error": add_mesh.get("error"),
     }
     if not add_mesh.get("ok"):
+        dismiss_goskin_warnings(client, ocr_base=ocr_base)
         return {"ok": False, "steps": steps, "error": add_mesh.get("error")}
 
     time.sleep(0.45)
@@ -839,47 +876,29 @@ def run_goskin_skin(
     }
     mesh_count = (after_mesh.get("counts") or {}).get("mesh")
     if require_counts and (mesh_count is None or int(mesh_count) < 1):
+        steps["dismiss_after_mesh_fail"] = dismiss_goskin_warnings(
+            client, ocr_base=ocr_base
+        )
         return {
             "ok": False,
             "steps": steps,
             "error": (
                 "mesh_not_added: OCR did not show 模型：N>=1 after 选定 "
-                f"(counts={after_mesh.get('counts')})"
+                f"(counts={after_mesh.get('counts')}). "
+                "If a warning appeared, list slot was not focused before 选定."
             ),
         }
 
-    # ----- Step 2: focus list entry, then bones -----
-    focus = click_between_texts(
-        "合并网格",
-        "编辑区",
+    # ----- Step 2: focus 模型：N row, then bones -----
+    focus = focus_goskin_list_slot(
+        client,
         title_pattern=title_pattern,
         vendor_pattern=vendor_pattern,
         ocr_base=ocr_base,
-        client=client,
-        prefer_dynamic_list=True,
+        required=False,
+        prefer_placeholder=False,
     )
-    steps["list_focus"] = {
-        "ok": focus.get("ok"),
-        "method": focus.get("method"),
-        "screen_xy": focus.get("screen_xy"),
-        "error": focus.get("error"),
-    }
-    if not focus.get("ok"):
-        fb = click_dialog_button(
-            "模型：",
-            title_pattern=title_pattern,
-            vendor_pattern=vendor_pattern,
-            ocr_base=ocr_base,
-            client=client,
-        )
-        steps["list_focus_fallback"] = {
-            "ok": fb.get("ok"),
-            "screen_xy": fb.get("screen_xy"),
-            "error": fb.get("error"),
-        }
-        if not fb.get("ok"):
-            steps["list_focus"]["soft"] = True
-
+    steps["list_focus"] = focus
     time.sleep(0.3)
 
     sel_bones = _require_selection(client, names=bone_names, role="bone")
@@ -903,6 +922,7 @@ def run_goskin_skin(
         "error": add_bones.get("error"),
     }
     if not add_bones.get("ok"):
+        dismiss_goskin_warnings(client, ocr_base=ocr_base)
         return {"ok": False, "steps": steps, "error": add_bones.get("error")}
 
     time.sleep(0.45)
@@ -920,6 +940,9 @@ def run_goskin_skin(
     }
     joint_count = (after_bones.get("counts") or {}).get("joints")
     if require_counts and (joint_count is None or int(joint_count) < 1):
+        steps["dismiss_after_bones_fail"] = dismiss_goskin_warnings(
+            client, ocr_base=ocr_base
+        )
         return {
             "ok": False,
             "steps": steps,

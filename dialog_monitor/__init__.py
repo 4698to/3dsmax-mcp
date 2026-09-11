@@ -12,7 +12,9 @@ __all__ = [
     "click_dialog_button",
     "click_menu_path",
     "confirm_goskin_start",
+    "dismiss_goskin_warnings",
     "ensure_goskin_ready",
+    "focus_goskin_list_slot",
     "health",
     "recognize",
     "recognize_dialog",
@@ -34,6 +36,8 @@ def __getattr__(name: str) -> Any:
         "detect_goskin_needs_cleanup",
         "confirm_goskin_start",
         "build_start_confirmation",
+        "dismiss_goskin_warnings",
+        "focus_goskin_list_slot",
     }:
         from . import goskin_flow
 

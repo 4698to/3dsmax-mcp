@@ -479,15 +479,29 @@ def image_to_screen(
 ) -> tuple[int, int]:
     """Map image-pixel center to physical screen coordinates.
 
-    ``windows.snapshot`` is client-area content. Prefer ``client_rect``
-    (ClientToScreen origin + GetClientRect size) when present; outer
-    ``screen_rect`` alone mis-clicks into the title bar / borders.
+    ``windows.snapshot`` is usually client-area content, but Max often returns a
+    bitmap a few pixels taller than GetClientRect (non-client chrome in the
+    capture). Prefer ``client_rect`` origin; when width matches, use 1:1 X and
+    subtract top padding instead of uniformly scaling Y (which misses list rows).
     """
     iw = max(1, int(image_width))
     ih = max(1, int(image_height))
-    rect = client_rect if isinstance(client_rect, dict) and client_rect.get("w") else screen_rect
-    sx = int(round(float(rect["x"]) + cx * float(rect["w"]) / iw))
-    sy = int(round(float(rect["y"]) + cy * float(rect["h"]) / ih))
+    if isinstance(client_rect, dict) and client_rect.get("w"):
+        ox = float(client_rect["x"])
+        oy = float(client_rect["y"])
+        cw = float(client_rect["w"])
+        ch = float(client_rect["h"])
+        # Width match (±2px): treat as client bitmap with optional top pad.
+        if abs(cw - iw) <= 2.0:
+            top_pad = max(0.0, float(ih) - ch)
+            sx = int(round(ox + cx * cw / iw))
+            sy = int(round(oy + cy - top_pad))
+            return sx, sy
+        sx = int(round(ox + cx * cw / iw))
+        sy = int(round(oy + cy * ch / ih))
+        return sx, sy
+    sx = int(round(float(screen_rect["x"]) + cx * float(screen_rect["w"]) / iw))
+    sy = int(round(float(screen_rect["y"]) + cy * float(screen_rect["h"]) / ih))
     return sx, sy
 
 
@@ -935,7 +949,7 @@ def _prefer_dynamic_list_line(
     score_min: float = 0.5,
 ) -> dict[str, Any] | None:
     """Prefer filled list row (模型:...) or placeholder over other labels."""
-    for needle in ("选中后在编辑区添加", "模型:"):
+    for needle in ("选中后在编辑区添加", "模型：", "模型:"):
         hit = find_matching_line(lines, needle, score_min=score_min)
         if hit is not None:
             return hit

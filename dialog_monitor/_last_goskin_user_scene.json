@@ -72,8 +72,13 @@
     "error": null
   },
   "skin": {
-    "ok": false,
+    "ok": true,
     "steps": {
+      "dismiss_warnings": {
+        "ok": true,
+        "clicked": [],
+        "dismissed": false
+      },
       "cleanup": {
         "ok": true,
         "cleaned": false,
@@ -131,6 +136,37 @@
           "joints": null
         }
       },
+      "focus_list_slot": {
+        "ok": true,
+        "matched": {
+          "text": "(选中后在编辑区添加)",
+          "score": 0.9901697635650635,
+          "box": [
+            [
+              33.0,
+              188.0
+            ],
+            [
+              154.0,
+              188.0
+            ],
+            [
+              154.0,
+              203.0
+            ],
+            [
+              33.0,
+              203.0
+            ]
+          ]
+        },
+        "screen_xy": [
+          1060,
+          368
+        ],
+        "needle": "(选中后在编辑区添加)",
+        "error": null
+      },
       "select_mesh_scene": {
         "ok": true,
         "count": 1,
@@ -143,7 +179,7 @@
         "ok": true,
         "matched": {
           "text": "选定",
-          "score": 0.9988631010055542,
+          "score": 0.9993189573287964,
           "box": [
             [
               216.0,
@@ -155,29 +191,29 @@
             ],
             [
               248.0,
-              281.0
+              280.0
             ],
             [
               216.0,
-              281.0
+              280.0
             ]
           ]
         },
         "screen_xy": [
-          1199,
-          443
+          1198,
+          444
         ],
         "image_xy": [
           232.0,
-          271.0
+          270.5
         ],
         "error": null
       },
       "verify_mesh": {
         "ok": true,
         "counts": {
-          "mesh": null,
-          "joints": null
+          "mesh": 1,
+          "joints": 0
         },
         "ocr_texts": [
           "骨骼架设",
@@ -190,26 +226,181 @@
           "面部蒙皮",
           "算法模型",
           "general-v4.5",
-          "☑合并网格",
+          "合并网格",
           "全局蒙皮",
-          "(选中后在编辑区添加)",
+          "模型：1",
+          "关节：0",
           "编辑区",
           "在场景中选择模型",
           "选定",
           "删除",
           "清空",
+          "Box001",
           "在场景中选择关节",
           "选定",
           "删除",
           "清空",
           "开始蒙皮",
           "修复飞点",
-          "等待用户开始蒙皮操作."
+          "等待用户开始蒙皮操作.."
         ],
         "error": null
+      },
+      "list_focus": {
+        "ok": true,
+        "matched": {
+          "text": "模型：1",
+          "score": 0.9994485378265381,
+          "box": [
+            [
+              26.0,
+              187.0
+            ],
+            [
+              73.0,
+              187.0
+            ],
+            [
+              73.0,
+              203.0
+            ],
+            [
+              26.0,
+              203.0
+            ]
+          ]
+        },
+        "screen_xy": [
+          1016,
+          368
+        ],
+        "needle": "模型：",
+        "error": null
+      },
+      "select_bones_scene": {
+        "ok": true,
+        "count": 3,
+        "names": [
+          "Bone001",
+          "Bone002",
+          "Bone003"
+        ],
+        "raw": "ok|3|#(\"Bone001\", \"Bone002\", \"Bone003\")"
+      },
+      "select_bones": {
+        "ok": true,
+        "matched": {
+          "text": "选定",
+          "score": 0.9993189573287964,
+          "box": [
+            [
+              216.0,
+              398.0
+            ],
+            [
+              248.0,
+              398.0
+            ],
+            [
+              248.0,
+              417.0
+            ],
+            [
+              216.0,
+              417.0
+            ]
+          ]
+        },
+        "screen_xy": [
+          1198,
+          580
+        ],
+        "image_xy": [
+          232.0,
+          407.5
+        ],
+        "error": null
+      },
+      "verify_bones": {
+        "ok": true,
+        "counts": {
+          "mesh": 1,
+          "joints": 3
+        },
+        "ocr_texts": [
+          "骨骼架设",
+          "蒙皮",
+          "后处理",
+          "配置",
+          "全局蒙皮",
+          "局部蒙皮",
+          "裙摆蒙皮",
+          "面部蒙皮",
+          "算法模型",
+          "general-v4.5",
+          "合并网格",
+          "全局蒙皮",
+          "模型：1",
+          "关节：3",
+          "编辑区",
+          "在场景中选择模型",
+          "选定",
+          "删除",
+          "清空",
+          "Box001",
+          "在场景中选择关节",
+          "选定",
+          "删除",
+          "清空",
+          "Bone001",
+          "Bone002",
+          "Bone003",
+          "开始蒙皮",
+          "修复飞点",
+          "等待用户开始蒙皮操作.."
+        ],
+        "error": null
+      },
+      "confirmation": {
+        "need_user_confirm": true,
+        "action": "开始蒙皮",
+        "mesh_count": 1,
+        "joint_count": 3,
+        "mesh_names": [
+          "Box001"
+        ],
+        "bone_names": [
+          "Bone001",
+          "Bone002",
+          "Bone003"
+        ],
+        "summary": "即将点击「开始蒙皮」，请确认以下信息：\n- 模型数量: 1\n- 模型名称: Box001\n- 关节/骨骼数量: 3\n- 关节/骨骼名称: Bone001, Bone002, Bone003\n确认后请调用 goskin_confirm_start(user_confirmed=true)。未确认不会点击「开始蒙皮」。",
+        "prompt_zh": "即将点击「开始蒙皮」，请确认以下信息："
       }
     },
-    "error": "mesh_not_added: OCR did not show 模型：N>=1 after 选定 (counts={'mesh': None, 'joints': None})"
+    "error": null,
+    "awaiting_start_confirm": true,
+    "confirmation": {
+      "need_user_confirm": true,
+      "action": "开始蒙皮",
+      "mesh_count": 1,
+      "joint_count": 3,
+      "mesh_names": [
+        "Box001"
+      ],
+      "bone_names": [
+        "Bone001",
+        "Bone002",
+        "Bone003"
+      ],
+      "summary": "即将点击「开始蒙皮」，请确认以下信息：\n- 模型数量: 1\n- 模型名称: Box001\n- 关节/骨骼数量: 3\n- 关节/骨骼名称: Bone001, Bone002, Bone003\n确认后请调用 goskin_confirm_start(user_confirmed=true)。未确认不会点击「开始蒙皮」。",
+      "prompt_zh": "即将点击「开始蒙皮」，请确认以下信息："
+    },
+    "counts": {
+      "mesh": 1,
+      "joints": 3
+    },
+    "user_prompt": "即将点击「开始蒙皮」，请确认以下信息：\n- 模型数量: 1\n- 模型名称: Box001\n- 关节/骨骼数量: 3\n- 关节/骨骼名称: Bone001, Bone002, Bone003\n确认后请调用 goskin_confirm_start(user_confirmed=true)。未确认不会点击「开始蒙皮」。"
   },
   "ocr_after": [
     "骨骼架设",
@@ -222,21 +413,26 @@
     "面部蒙皮",
     "算法模型",
     "general-v4.5",
-    "☑合并网格",
+    "合并网格",
     "全局蒙皮",
-    "(选中后在编辑区添加)",
+    "模型：1",
+    "关节：3",
     "编辑区",
     "在场景中选择模型",
     "选定",
     "删除",
     "清空",
+    "Box001",
     "在场景中选择关节",
     "选定",
     "删除",
     "清空",
+    "Bone001",
+    "Bone002",
+    "Bone003",
     "开始蒙皮",
     "修复飞点",
-    "等待用户开始蒙皮操作."
+    "等待用户开始蒙皮操作.."
   ],
   "ocr_after_error": null
 }
