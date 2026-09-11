@@ -1,0 +1,242 @@
+{
+  "src": "d:\\Documents\\3dsMax\\测试模拟鼠标点击.max",
+  "dest": "K:\\资源中心开发一部动作组的文档\\每月作品上传\\workspace\\测试模拟鼠标点击.max",
+  "load": "Loaded scene: 测试模拟鼠标点击.max",
+  "scene": {
+    "file": "K:\\资源中心开发一部动作组的文档\\每月作品上传\\workspace\\测试模拟鼠标点击.max",
+    "geo": [
+      "Box001"
+    ],
+    "bones": [
+      "Bone001",
+      "Bone002",
+      "Bone003"
+    ],
+    "other": [],
+    "raw": "FILE|K:\\资源中心开发一部动作组的文档\\每月作品上传\\workspace\\测试模拟鼠标点击.max\ngeo|Box001|Box\nbone|Bone001|BoneGeometry\nbone|Bone002|BoneGeometry\nbone|Bone003|BoneGeometry"
+  },
+  "mesh_names": [
+    "Box001"
+  ],
+  "bone_names": [
+    "Bone001",
+    "Bone002",
+    "Bone003"
+  ],
+  "ensure": {
+    "ok": true,
+    "steps": {
+      "detect": {
+        "ok": true,
+        "exists": true,
+        "hwnd": 263916,
+        "title": "自动蒙皮4.6.3 - 1803442430 - 天晴数码",
+        "match_count": 1,
+        "title_pattern": "自动蒙皮4.*",
+        "vendor_pattern": "*天晴数码"
+      },
+      "pre_ocr": {
+        "ok": true,
+        "ocr_texts": [
+          "骨骼架设",
+          "蒙皮",
+          "后处理",
+          "配置",
+          "全局蒙皮",
+          "局部蒙皮",
+          "裙摆蒙皮",
+          "面部蒙皮",
+          "算法模型",
+          "general-v4.5",
+          "☑合并网格",
+          "全局蒙皮",
+          "(选中后在编辑区添加)",
+          "编辑区",
+          "在场景中选择模型",
+          "选定",
+          "删除",
+          "清空",
+          "在场景中选择关节",
+          "选定",
+          "删除",
+          "清空",
+          "开始蒙皮",
+          "修复飞点",
+          "等待用户开始蒙皮操作."
+        ],
+        "error": null
+      },
+      "tabs_skipped": true
+    },
+    "opened_via_menu": false,
+    "error": null
+  },
+  "skin": {
+    "ok": false,
+    "steps": {
+      "cleanup": {
+        "ok": true,
+        "cleaned": false,
+        "skipped": true,
+        "steps": {
+          "before": {
+            "ok": true,
+            "counts": {
+              "mesh": null,
+              "joints": null
+            },
+            "ocr_texts": [
+              "骨骼架设",
+              "蒙皮",
+              "后处理",
+              "配置",
+              "全局蒙皮",
+              "局部蒙皮",
+              "裙摆蒙皮",
+              "面部蒙皮",
+              "算法模型",
+              "general-v4.5",
+              "☑合并网格",
+              "全局蒙皮",
+              "(选中后在编辑区添加)",
+              "编辑区",
+              "在场景中选择模型",
+              "选定",
+              "删除",
+              "清空",
+              "在场景中选择关节",
+              "选定",
+              "删除",
+              "清空",
+              "开始蒙皮",
+              "修复飞点",
+              "等待用户开始蒙皮操作."
+            ],
+            "error": null
+          },
+          "detect": {
+            "needed": false,
+            "reasons": [],
+            "counts": {
+              "mesh": null,
+              "joints": null
+            },
+            "mesh_edit_area": [],
+            "joint_edit_area": []
+          }
+        },
+        "error": null,
+        "counts": {
+          "mesh": null,
+          "joints": null
+        }
+      },
+      "select_mesh_scene": {
+        "ok": true,
+        "count": 1,
+        "names": [
+          "Box001"
+        ],
+        "raw": "ok|1|#(\"Box001\")"
+      },
+      "select_mesh": {
+        "ok": true,
+        "matched": {
+          "text": "选定",
+          "score": 0.9988631010055542,
+          "box": [
+            [
+              216.0,
+              261.0
+            ],
+            [
+              248.0,
+              261.0
+            ],
+            [
+              248.0,
+              281.0
+            ],
+            [
+              216.0,
+              281.0
+            ]
+          ]
+        },
+        "screen_xy": [
+          1199,
+          443
+        ],
+        "image_xy": [
+          232.0,
+          271.0
+        ],
+        "error": null
+      },
+      "verify_mesh": {
+        "ok": true,
+        "counts": {
+          "mesh": null,
+          "joints": null
+        },
+        "ocr_texts": [
+          "骨骼架设",
+          "蒙皮",
+          "后处理",
+          "配置",
+          "全局蒙皮",
+          "局部蒙皮",
+          "裙摆蒙皮",
+          "面部蒙皮",
+          "算法模型",
+          "general-v4.5",
+          "☑合并网格",
+          "全局蒙皮",
+          "(选中后在编辑区添加)",
+          "编辑区",
+          "在场景中选择模型",
+          "选定",
+          "删除",
+          "清空",
+          "在场景中选择关节",
+          "选定",
+          "删除",
+          "清空",
+          "开始蒙皮",
+          "修复飞点",
+          "等待用户开始蒙皮操作."
+        ],
+        "error": null
+      }
+    },
+    "error": "mesh_not_added: OCR did not show 模型：N>=1 after 选定 (counts={'mesh': None, 'joints': None})"
+  },
+  "ocr_after": [
+    "骨骼架设",
+    "蒙皮",
+    "后处理",
+    "配置",
+    "全局蒙皮",
+    "局部蒙皮",
+    "裙摆蒙皮",
+    "面部蒙皮",
+    "算法模型",
+    "general-v4.5",
+    "☑合并网格",
+    "全局蒙皮",
+    "(选中后在编辑区添加)",
+    "编辑区",
+    "在场景中选择模型",
+    "选定",
+    "删除",
+    "清空",
+    "在场景中选择关节",
+    "选定",
+    "删除",
+    "清空",
+    "开始蒙皮",
+    "修复飞点",
+    "等待用户开始蒙皮操作."
+  ],
+  "ocr_after_error": null
+}

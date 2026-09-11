@@ -1,0 +1,83 @@
+-- Injected by dialog_monitor.click_button.click_at_screen
+(
+	local ix = __MCP_CLICK_X__
+	local iy = __MCP_CLICK_Y__
+	local fg = __MCP_CLICK_HWND__
+
+	if fg != 0 do
+	(
+		try (windows.setForegroundWindow fg) catch ()
+		sleep 0.08
+	)
+
+	fn mcpEnsureAbsMouse =
+	(
+		try
+		(
+			if (dotNetClass "McpDialogMouseAbs") != undefined do return true
+		)
+		catch ()
+
+		local source = ""
+		source += "using System;\n"
+		source += "using System.Runtime.InteropServices;\n"
+		source += "public class McpDialogMouseAbs {\n"
+		source += "  [DllImport(\"user32.dll\")] static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);\n"
+		source += "  [DllImport(\"user32.dll\")] static extern int GetSystemMetrics(int n);\n"
+		source += "  [DllImport(\"user32.dll\")] static extern bool SetCursorPos(int X, int Y);\n"
+		source += "  const uint MOVE=0x0001, LEFTDOWN=0x0002, LEFTUP=0x0004, ABSOLUTE=0x8000, VIRTUALDESK=0x4000;\n"
+		source += "  public static void Click(int x, int y) {\n"
+		source += "    int vx = GetSystemMetrics(76), vy = GetSystemMetrics(77);\n"
+		source += "    int vw = GetSystemMetrics(78), vh = GetSystemMetrics(79);\n"
+		source += "    if (vw <= 1) { vw = GetSystemMetrics(0); vh = GetSystemMetrics(1); vx = 0; vy = 0; }\n"
+		source += "    uint ax = (uint)System.Math.Round((x - vx) * 65535.0 / System.Math.Max(1, vw - 1));\n"
+		source += "    uint ay = (uint)System.Math.Round((y - vy) * 65535.0 / System.Math.Max(1, vh - 1));\n"
+		source += "    SetCursorPos(x, y);\n"
+		source += "    System.Threading.Thread.Sleep(30);\n"
+		source += "    mouse_event(MOVE | ABSOLUTE | VIRTUALDESK, ax, ay, 0, UIntPtr.Zero);\n"
+		source += "    System.Threading.Thread.Sleep(30);\n"
+		source += "    mouse_event(LEFTDOWN | ABSOLUTE | VIRTUALDESK, ax, ay, 0, UIntPtr.Zero);\n"
+		source += "    System.Threading.Thread.Sleep(50);\n"
+		source += "    mouse_event(LEFTUP | ABSOLUTE | VIRTUALDESK, ax, ay, 0, UIntPtr.Zero);\n"
+		source += "  }\n"
+		source += "}\n"
+
+		try
+		(
+			local provider = dotNetObject "Microsoft.CSharp.CSharpCodeProvider"
+			local parms = dotNetObject "System.CodeDom.Compiler.CompilerParameters"
+			parms.GenerateInMemory = true
+			parms.ReferencedAssemblies.Add "System.dll"
+			local results = provider.CompileAssemblyFromSource parms #(source)
+			if results.Errors.HasErrors then
+			(
+				local msg = ""
+				for i = 0 to (results.Errors.Count - 1) do
+					msg += (results.Errors.Item[i].ErrorText + "; ")
+				format "MCP abs mouse compile failed: %\n" msg
+				false
+			)
+			else true
+		)
+		catch
+		(
+			format "MCP abs mouse load failed: %\n" (getCurrentException())
+			false
+		)
+	)
+
+	if not (mcpEnsureAbsMouse()) then
+		"{\"ok\":false,\"error\":\"abs mouse helper unavailable\"}"
+	else
+	(
+		try
+		(
+			(dotNetClass "McpDialogMouseAbs").Click ix iy
+			("{\"ok\":true,\"x\":" + (ix as string) + ",\"y\":" + (iy as string) + ",\"method\":\"mouse_event_abs\"}")
+		)
+		catch
+		(
+			("{\"ok\":false,\"error\":\"" + (substituteString (getCurrentException() as string) "\\" "/") + "\"}")
+		)
+	)
+)

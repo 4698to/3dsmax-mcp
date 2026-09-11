@@ -102,6 +102,11 @@ TOOLSET_SPECS = (
         ("viewport",),
     ),
     ToolsetSpec(
+        "dialog_ui",
+        "Plugin dialog / menubar OCR capture and simulated mouse clicks (external OCR service).",
+        ("dialog_monitor", "goskin"),
+    ),
+    ToolsetSpec(
         "automation",
         "Raw MAXScript fallback plus direct invocation and smoke-test drivers.",
         ("execute", "tool_test"),

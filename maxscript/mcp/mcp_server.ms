@@ -28,8 +28,21 @@ global MCP_UI
 -- .NET 事件经全局函数中转: struct 方法直接传给 dotNet.addEventHandler 在个别
 -- 3ds Max 版本 / 启动方式下事件可能不触发(委托易被 GC 回收), 全局函数委托最可靠
 global mcpServer_onTick, mcpServer_onHeartbeat
-fn mcpServer_onTick sender args = (if MCP_Server != undefined do MCP_Server.onTick sender args)
-fn mcpServer_onHeartbeat sender args = (if MCP_Server != undefined do MCP_Server.onHeartbeat sender args)
+-- Do not use isKindOf here: after fileIn redefines MCPServerStruct, old
+-- instances fail isKindOf and Tick would go silent or reload would skip stop().
+-- Probe a known field; HWND Pointers / wrong values throw and count as dead.
+fn mcpServer_isLive =
+(
+	try (MCP_Server != undefined and MCP_Server.isRunning != undefined) catch false
+)
+fn mcpServer_onTick sender args =
+(
+	if mcpServer_isLive() do MCP_Server.onTick sender args
+)
+fn mcpServer_onHeartbeat sender args =
+(
+	if mcpServer_isLive() do MCP_Server.onHeartbeat sender args
+)
 
 struct MCPServerStruct
 (
@@ -473,6 +486,22 @@ struct MCPServerStruct
 		response
 	),
 
+	-- Max 2015/2016 often resolve Write/WriteLine(MAXScript string) to the
+	-- char overload (only the first character is sent). Writing one character at
+	-- a time makes that overload correct by construction.
+	fn writeResponseLine stream text =
+	(
+		local s = if text != undefined then (text as string) else ""
+		-- UTF8Encoding(false) = no BOM. Default Encoding.UTF8 writes a BOM that
+		-- breaks JSON parsers on the Python side.
+		local enc = dotNetObject "System.Text.UTF8Encoding" false
+		local writer = dotNetObject "System.IO.StreamWriter" stream enc
+		writer.AutoFlush = true
+		for i = 1 to s.count do writer.Write (substring s i 1)
+		writer.Write ((dotNetClass "System.Environment").NewLine)
+		writer.Flush()
+	),
+
 	-- Handle a single client connection
 	fn handleClient client =
 	(
@@ -482,33 +511,39 @@ struct MCPServerStruct
 			-- Prevent permanent wedging: a dead/stuck client must not block
 			-- the poll loop (and the whole MAXScript main thread) forever.
 			try (stream.ReadTimeout = 10000) catch ()
-			reader = dotNetObject "System.IO.StreamReader" stream
-			writer = dotNetObject "System.IO.StreamWriter" stream
+			reader = dotNetObject "System.IO.StreamReader" stream (dotNetClass "System.Text.Encoding").UTF8
 
 			-- Read the request line
 			requestLine = reader.ReadLine()
 
 			-- Convert .NET string to MAXScript string
-			requestStr = requestLine as string
+			requestStr = if requestLine != undefined then (requestLine as string) else ""
 
-			format "MCP: Received request: %\n" requestStr
-
-			if requestStr != undefined and requestStr.count > 0 then
+			if requestStr.count > 0 then
 			(
-				-- Process and send response
+				-- Background online probes use requestId "probe"; keep Listener quiet.
+				local isProbe = (findString requestStr "\"requestId\":\"probe\"") != undefined or \
+					(findString requestStr "\"requestId\": \"probe\"") != undefined
+				if not isProbe do format "MCP: Received request: %\n" requestStr
 				responseStr = this.processRequest requestStr
-				format "MCP: Sending response: %\n" responseStr
-				writer.WriteLine responseStr
-				writer.Flush()
+				if not isProbe do format "MCP: Sending response: %\n" responseStr
+				try
+				(
+					this.writeResponseLine stream responseStr
+				)
+				catch
+				(
+					format "MCP: Write response failed: %\n" (getCurrentException())
+				)
 			)
 			else
 			(
-				format "MCP: Empty request received\n"
+				-- Peer connected and closed with no line (old TCP probes / port
+				-- scanners). Stay quiet — do not spam the Listener.
 			)
 
-			reader.Close()
-			writer.Close()
-			client.Close()
+			try (reader.Close()) catch ()
+			try (client.Close()) catch ()
 		)
 		catch
 		(
@@ -713,9 +748,11 @@ struct MCPServerStruct
 -- the configured transport (auto | tcp | native). `MCP Stop` shuts the TCP
 -- fallback back down. Keep native bridge as the default path for normal
 -- interactive use.
-if MCP_Server != undefined and MCP_Server.isRunning then
+-- Guard corrupted MCP_Server (e.g. HWND Pointer 923704P): probing .isRunning
+-- must not block reload. Always recreate the struct after optional stop.
+if MCP_Server != undefined then
 (
-	MCP_Server.stop()
+	try (if MCP_Server.isRunning do MCP_Server.stop()) catch ()
 )
 MCP_Server = MCPServerStruct()
 MCP_Server.loadConfig()
@@ -939,10 +976,15 @@ MCP_SceneManage = SceneManageStruct()
 -- UI 事件经全局函数中转: struct 方法直接传给 dotNet.addEventHandler 在个别
 -- 3ds Max 版本 / 启动方式下事件可能不触发, 全局函数值做委托转换最可靠
 global mcpUI_onModeChanged,mcpUI_onStartClick,mcpUI_onStopClick,mcpUI_onFormClosing
+global mcpUI_onControlGotFocus,mcpUI_onControlLostFocus
 fn mcpUI_onModeChanged sender args = (if MCP_UI != undefined do MCP_UI.onModeChanged sender args)
 fn mcpUI_onStartClick sender args = (if MCP_UI != undefined do MCP_UI.onStartClick sender args)
 fn mcpUI_onStopClick sender args = (if MCP_UI != undefined do MCP_UI.onStopClick sender args)
 fn mcpUI_onFormClosing sender args = (if MCP_UI != undefined do MCP_UI.onFormClosing sender args)
+-- WinForms TextBox 在 Max 中拿不到键盘输入: Max 主窗口加速键会先吃掉按键。
+-- 焦点进入控件时关闭加速键, 离开时恢复 (Autodesk / 社区标准做法)。
+fn mcpUI_onControlGotFocus sender args = (enableAccelerators = false)
+fn mcpUI_onControlLostFocus sender args = (enableAccelerators = true)
 struct MCPUIStruct
 (
 	form = undefined,
@@ -1080,6 +1122,8 @@ struct MCPUIStruct
 	-- 关闭窗口: 勾选"关闭时停止服务"则停止并关闭, 否则仅隐藏窗口
 	fn onFormClosing sender args =
 	(
+		-- 窗口关掉时务必恢复 Max 加速键, 避免 LostFocus 未触发导致快捷键失效
+		enableAccelerators = true
 		if this.closeStopCheckBox.Checked then
 		(
 			if MCP_Server != undefined and MCP_Server.isRunning do MCP_Server.stop()
@@ -1092,6 +1136,18 @@ struct MCPUIStruct
 			args.Cancel = true
 			this.form.Hide()
 		)
+	),
+
+	-- 给需要键盘输入的控件挂焦点钩子 (TextBox / 可键入 ComboBox)
+	fn hookKeyboardFocus ctrl =
+	(
+		if ctrl == undefined then return()
+		try
+		(
+			dotNet.addEventHandler ctrl "GotFocus" mcpUI_onControlGotFocus
+			dotNet.addEventHandler ctrl "LostFocus" mcpUI_onControlLostFocus
+		)
+		catch ()
 	),
 
 	-- 清空全部控件引用: 窗体已销毁 / 创建失败后重置, 保证下次 show() 完整重建
@@ -1173,6 +1229,7 @@ struct MCPUIStruct
 			this.ipTextBox.Text = "127.0.0.1"
 			this.ipTextBox.ReadOnly = true
 			this.form.Controls.Add this.ipTextBox
+			this.hookKeyboardFocus this.ipTextBox
 
 			-- 端口
 			local lblPort = dotNetObject "System.Windows.Forms.Label"
@@ -1186,6 +1243,7 @@ struct MCPUIStruct
 			this.portTextBox.Size = dotNetObject "System.Drawing.Size" 120 24
 			this.portTextBox.Text = "8765"
 			this.form.Controls.Add this.portTextBox
+			this.hookKeyboardFocus this.portTextBox
 
 			-- 安全模式
 			this.safeCheckBox = dotNetObject "System.Windows.Forms.CheckBox"

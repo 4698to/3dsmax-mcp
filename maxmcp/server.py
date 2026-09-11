@@ -23,15 +23,72 @@ mcp = FastMCP(
 # is never run, so its tools remain callable without being advertised by the
 # public MCP list_tools surface.
 _progressive_mcp = FastMCP("3dsmax-mcp-progressive-hidden")
-client = MaxClient()
 
-# Shared workspace for file transfer: client uploads land here, Max-side
-# scripts read/write these local paths directly. Overridable via MAXMCP_WORKSPACE.
-WORKSPACE_DIR = Path(
-    os.environ.get("MAXMCP_WORKSPACE")
-    or Path(os.environ.get("TEMP", ".")) / "3dsmax-mcp" / "workspace"
+
+class SessionRoutedClient:
+    """Send tool traffic to the Max instance bound to the current MCP session.
+
+    Falls back to the sole configured instance (max_instances.ini / env), then
+    to a localhost MaxClient. Without this proxy, tools always hit 127.0.0.1
+    even after acquire_instance selected a remote host.
+    """
+
+    def __init__(self) -> None:
+        self._fallback = MaxClient()
+
+    def _active(self) -> MaxClient:
+        from .instance_manager import manager
+
+        session = None
+        try:
+            ctx = mcp.get_context()
+            session = getattr(ctx, "session", None) if ctx is not None else None
+        except Exception:
+            session = None
+        if session is not None:
+            try:
+                return manager.get_for_session(session)
+            except Exception:
+                pass
+        with manager._lock:
+            if len(manager._instances) == 1:
+                inst = manager._instances[0]
+                return manager._clients[inst.name]
+        return self._fallback
+
+    def send_command(self, *args, **kwargs):
+        return self._active().send_command(*args, **kwargs)
+
+    def clear_last_response(self) -> None:
+        return self._active().clear_last_response()
+
+    def get_last_transport(self):
+        return self._active().get_last_transport()
+
+    def __getattr__(self, name: str):
+        return getattr(self._active(), name)
+
+
+client = SessionRoutedClient()
+
+# Shared workspace for file transfer. Prefer max_instances.ini [workspace] path=
+# (or MAXMCP_WORKSPACE) so Max hosts and Python share one directory. When that
+# is unset there is no shared workspace — fall back to a per-machine TEMP dir
+# (same-host only).
+from .workspace_config import resolve_workspace_dir, workspace_info
+
+WORKSPACE_DIR = resolve_workspace_dir()
+try:
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    logging.warning("Could not create workspace dir %s", WORKSPACE_DIR)
+_ws = workspace_info()
+logging.info(
+    "Workspace: shared=%s path=%s source=%s",
+    _ws["shared_configured"],
+    _ws["effective_workspace"],
+    _ws["source"],
 )
-WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 if __name__ == "__main__" and __spec__ is not None:
     sys.modules.setdefault(__spec__.name, sys.modules[__name__])
@@ -67,6 +124,8 @@ _READ_ONLY_TOOLS = {
     "capture_viewport",
     "capture_multi_view",
     "capture_screen",
+    "check_dialog_ocr_health",
+    "recognize_plugin_dialog",
     "get_effects",
     "get_state_sets",
     "get_camera_sequence",
@@ -254,6 +313,8 @@ CORE_TOOL_MODULES = (
     "lighting",
     "organize",
     "viewport",
+    "dialog_monitor",
+    "goskin",
     "identify",
     "file_access",
     "files",
@@ -405,6 +466,9 @@ def max_assistant() -> str:
         "Work in natural language with the user, but keep tool usage structured and explicit.\n"
         "DO NOT render unless the user asks.\n"
         "Use capture_viewport for fast viewport context.\n"
+        "For plugin UI that has no MaxScript API, use recognize_plugin_dialog / "
+        "click_plugin_dialog_button / click_plugin_menu_path (OCR + mouse). "
+        "Check check_dialog_ocr_health first if OCR fails.\n"
         "MCP tool replies are structured objects: `{ok, result}` on success, `{ok, error}` on failure, optional top-level `hint` (`message`, `suggested_tools`, `next`). Transport only when present on errors. Set MCP_TRIPBACK_MODE=full for elapsed_ms and full transport metadata.\n"
         "If ok is false, read error.message and any hint.suggested_tools before retrying or choosing a fallback.\n"
         f"Reference resource: {SKILL_RESOURCE_URI}\n"

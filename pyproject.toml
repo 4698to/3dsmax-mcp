@@ -62,12 +62,14 @@ packages = ["maxmcp"]
 "install.py" = "maxmcp/installer.py"
 "pyproject.toml" = "maxmcp/pyproject.toml"
 "mcp_config.ini" = "maxmcp/mcp_config.ini"
+"max_instances.ini.example" = "maxmcp/max_instances.ini.example"
 "maxscript" = "maxmcp/maxscript"
 "native/bin" = "maxmcp/native/bin"
 "bundle/PackageContents.xml.in" = "maxmcp/bundle/PackageContents.xml.in"
 "skills/3dsmax-mcp-dev" = "maxmcp/skills/3dsmax-mcp-dev"
 "scripts/build_skill.py" = "maxmcp/scripts/build_skill.py"
 "scripts/render_signal_wait.ps1" = "maxmcp/scripts/render_signal_wait.ps1"
+"dialog_monitor" = "dialog_monitor"
 
 [project.scripts]
 3dsmax-mcp = "maxmcp.server:main"

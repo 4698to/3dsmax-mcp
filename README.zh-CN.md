@@ -15,6 +15,7 @@
 - **运行时自省** — 可发现任意 Max 类、插件接口与参数，方便自动化与二次开发
 - **灯光工具链** — 渲染器无关的灯光发现、创建、检查与受控编辑，支持各渲染器专属发光体、输出单位与环境绑定（1.6.7 新增）
 - **插件自省 v2** — 精确身份、有界查询、声明式枚举与状态令牌，配合原子类型化 `plugin_patch` 修改插件（1.6.7 新增）
+- **多人共享与多实例** — 一台共享服务器对接多台 3ds Max，多用户按"获取 → 使用 → 释放"独占实例，锁 TTL 与心跳自动清理失联（1.6.7 新增）
 - **深度插件支持** — tyFlow、Data Channel、MCG、OSL、Forest Pack、RailClone、Octane
 - **内置智能体技能包** — 附带 MAXScript 参考文档，便于你编写自己的工具
 
@@ -149,11 +150,26 @@ uv run python install.py
 
 直接双击 `start_python_server.bat` 即可（HTTP 绑定 `0.0.0.0:8000`，窗口会打印本机局域网 IP）。
 
-**无需设置 `MAXMCP_INSTANCES`** —— 服务器启动时会自动发现注册文件里所有存活的 3ds Max 实例，并持续刷新（新启动的实例自动加入，关闭的实例自动移除并释放其锁）。`MAXMCP_INSTANCES` 仅作为可选的旧式手动指定方式：
+**无需设置 `MAXMCP_INSTANCES`** —— 服务器启动时会自动发现注册文件里所有存活的 3ds Max 实例，并持续刷新（新启动的实例自动加入，关闭的实例自动移除并释放其锁）。
+
+跨机（Python 与 3ds Max 不在同一台电脑）时，本机注册表发现不到远程 Max，请用配置文件或环境变量显式指定：
+
+**推荐：编辑项目根目录的 `max_instances.ini`**（可从 `max_instances.ini.example` 复制）：
+
+```ini
+[instances]
+max1 = 192.168.139.45:8765
+```
+
+查找顺序：`MAXMCP_INSTANCES_FILE` → 当前目录 / 项目根 `max_instances.ini` → `%LOCALAPPDATA%\3dsmax-mcp\max_instances.ini`。
+
+也可继续用旧式环境变量：
 
 ```bash
-set MAXMCP_INSTANCES=127.0.0.1:8765:maxA,127.0.0.1:8766:maxB
+set MAXMCP_INSTANCES=192.168.139.45:8765:max1
 ```
+
+优先级：`MAXMCP_INSTANCES` 环境变量 > `max_instances.ini` > 本机注册表自动发现 > 回退 `127.0.0.1:8765`。
 
 ### 3. 其他人如何连接（客户端配置）
 
@@ -221,6 +237,9 @@ python -c "import sys; print(sys.executable)"
   }
 }
 ```
+
+> 如果该 Python 的 `Scripts` 目录已在系统 PATH 中（pip 默认会加入），
+> 也可以直接写 `"command": "3dsmax-mcp"`，与上面的写法等价（都指向 `maxmcp.server:main`）。
 
 如果使用源代码安装，也可以继续使用：
 

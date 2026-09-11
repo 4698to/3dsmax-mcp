@@ -18,6 +18,7 @@ nul
 cache/
 local/
 .env
+max_instances.ini
 outputs/
 screenshots/
 # Live smoke run output (redirected stdout/stderr)

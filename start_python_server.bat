@@ -24,6 +24,9 @@ if errorlevel 1 (
 rem Launch the MCP server over HTTP bound to 0.0.0.0 so MCP clients on the
 rem LAN can connect. Point your client at http://<this-ip>:8000/mcp
 rem (streamable-http). Override the port via MCP_HTTP_PORT if needed.
+rem
+rem Remote 3ds Max: edit max_instances.ini (see max_instances.ini.example)
+rem or set MAXMCP_INSTANCES=host:port[:name],...
 set "MCP_TRANSPORT=streamable-http"
 set "MCP_HTTP_HOST=0.0.0.0"
 set "MCP_HTTP_PORT=8000"

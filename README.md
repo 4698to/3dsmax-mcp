@@ -60,6 +60,15 @@ The repository ships two launchers, one per MCP transport:
 
 Both require `uv` (run `install_deps.bat` once first) and keep their console window open while the server runs.
 
+For a remote 3ds Max (Python and Max on different machines), edit `max_instances.ini` (copy from `max_instances.ini.example`):
+
+```ini
+[instances]
+max1 = 192.168.x.x:8765
+```
+
+Priority: `MAXMCP_INSTANCES` env > `max_instances.ini` > local registry auto-discovery > `127.0.0.1:8765`.
+
 The transport is selected by the `MCP_TRANSPORT` environment variable: `stdio` (default) or `streamable-http`. When serving over HTTP, `MCP_HTTP_HOST` (default `0.0.0.0`) and `MCP_HTTP_PORT` (default `8000`) control the bind address and port.
 
 Point an MCP client at the HTTP endpoint `http://<ip>:8000/mcp` (replace `<ip>` with the printed LAN IP):

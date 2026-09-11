@@ -24,11 +24,12 @@ from ..server import mcp
 
 @mcp.tool()
 def list_instances() -> str:
-    """List all configured 3ds Max instances and their busy/idle state.
+    """List all configured 3ds Max instances and their busy/online state.
 
-    Shows each instance's name, host, port, whether it is currently held by a
-    user, and for how long. Use this to discover which instances exist and
-    which are free before acquiring one.
+    Shows each instance's name, host, port, whether it is pinned (from
+    MAXMCP_INSTANCES / max_instances.ini), TCP reachability (`online`),
+    whether it is held by a user (`busy`), and for how long. Use this before
+    acquire_instance. `online=false` means the listener port is not reachable.
     """
     return json.dumps({"instances": manager.list_instances()}, ensure_ascii=False)
 

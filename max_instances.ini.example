@@ -1,0 +1,30 @@
+# Python 端远程 / 本机 3ds Max 实例列表
+# 复制为本目录下的 max_instances.ini 后按需修改。
+#
+# 加载优先级:
+#   - max_instances.ini / MAXMCP_INSTANCES 中的条目为「固定」远程/本机目标
+#   - 同时仍会合并本机 %LOCALAPPDATA%\3dsmax-mcp\instances.jsonl
+#     （本地模式 Max 注册到这里），不会因为写了远程 IP 就关掉本机发现
+#
+# 跨机示例（Max 在 192.168.139.45，Python 在另一台机器）:
+#   Max 端 bindIP 填 0.0.0.0（或 Max 本机 IP），不要填 Python 的 IP。
+#   下方 host 填 Max 机器的局域网 IP。
+
+[instances]
+# 格式: 名称 = 主机:端口
+# max1 = 192.168.139.45:8765
+# max2 = 192.168.139.46:8766
+
+# ---------------------------------------------------------------------------
+# 共享 workspace（可选）
+# ---------------------------------------------------------------------------
+# 所有 3ds Max 主机与 Python MCP 主机必须能读写同一路径（推荐 UNC）。
+# 用于截图 OCR、上传下载等跨机文件交接。
+#
+# 解析优先级:
+#   1. 环境变量 MAXMCP_WORKSPACE
+#   2. 本文件 [workspace] path=
+# 未配置 = 不存在共享 workspace（仅本机 TEMP 回退，跨机读不到 Max 截图）。
+#
+# [workspace]
+# path = \\fileserver\share\3dsmax-mcp\workspace

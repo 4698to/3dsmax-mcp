@@ -155,15 +155,23 @@ def get_file_service_info() -> dict:
     """Describe the HTTP file transfer service for the remote 3ds Max server.
 
     Use this to get the base URL for uploading/downloading files and, more
-    importantly, the local ``workspace`` path on the server: files uploaded
-    through ``POST /files/upload`` land there, and Max scripts can read/write
-    that local path directly (the Max side cannot reach the client's disk).
+    importantly, the ``workspace`` path: files uploaded through
+    ``POST /files/upload`` land there, and Max scripts can read/write that
+    path directly. When ``shared_configured`` is true, the path comes from
+    max_instances.ini [workspace] (or MAXMCP_WORKSPACE) and must be writable
+    by every Max host and the Python MCP host.
     """
+    from ..workspace_config import workspace_info
+
     _ensure_workspace()
     base = _base_url()
+    info = workspace_info()
     return {
         "base_url": base,
-        "workspace": str(WORKSPACE_DIR),  # local path on the 3ds Max server machine
+        "workspace": str(WORKSPACE_DIR),
+        "shared_configured": info["shared_configured"],
+        "shared_workspace": info["shared_workspace"],
+        "workspace_source": info["source"],
         "upload_url": f"{base}/files/upload",
         "list_url": f"{base}/files",
         "download_url_template": f"{base}/files/{{filename}}",

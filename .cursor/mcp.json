@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "3dsmax-mcp": {
+      "url": "http://192.168.139.76:8000/mcp"
+    }
+  }
+}
