@@ -324,6 +324,7 @@ static bool IsWarningIssue(const std::string& code) {
 static std::string DetectProfile(MtlBase* root) {
     std::string cls = ClassName(root);
     std::string lower = Lower(cls);
+    if (lower.find("corona") != std::string::npos) return "corona";
     if (lower.find("octane") != std::string::npos ||
         lower.find("std_surface") != std::string::npos ||
         lower.find("std surface") != std::string::npos ||

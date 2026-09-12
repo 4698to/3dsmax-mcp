@@ -71,7 +71,7 @@ def annotate(data: dict) -> dict:
         choices = domains.get((ref.get("block_id"), ref.get("param_id"), property.get("name")))
         if choices and property.get("type") == "int":
             property["domain"] = {"kind": "enum", "choices": [{"name": k, "value": v} for k,v in choices.items()],
-                "complete": True, "source": "provider_reference", "evidence": evidence}
+                "complete": ids != CORONA_BITMAP, "source": "provider_reference", "evidence": evidence}
     return data
 
 

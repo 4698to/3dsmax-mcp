@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.0] — 2026-09-13
+
+- Added Corona lights and environment support, plus Corona PBR materials for palette laydown, smart import and texture-folder workflows.
+- Added Chaos Cosmos search, download and import tools for models, materials and HDRIs through Corona and V-Ray.
+- Added `execute_python` with captured output, JSON results, tracebacks and undo rollback.
+- Added Corona VFB interactive previews from the agent viewport and cropped captures across monitors.
+
 ## [1.6.8] — 2026-09-11
 
 - Added a Windows installer with Python, dependencies, native bridges and agent skills included.

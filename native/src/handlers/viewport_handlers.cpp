@@ -832,25 +832,26 @@ struct CaptureDpiScope {
     CaptureDpiScope() { if(!previous) throw std::runtime_error("Physical-pixel capture DPI context unavailable"); }
     ~CaptureDpiScope() { if(previous) set(previous); }
 };
+struct VfbSearch { std::string target; std::vector<HWND> windows; };
 BOOL CALLBACK FindVfbWindow(HWND window, LPARAM data) {
     DWORD process=0;
     GetWindowThreadProcessId(window,&process);
     if(process!=GetCurrentProcessId() || !IsWindowVisible(window) || IsIconic(window)) return TRUE;
     wchar_t caption[1024]{};
     GetWindowTextW(window,caption,1024);
-    std::wstring title(caption);
-    std::transform(title.begin(),title.end(),title.begin(),[](wchar_t c) { return std::towlower(c); });
-    if(title.find(L"v-ray frame buffer")!=std::wstring::npos || title.find(L"v-ray virtual frame buffer")!=std::wstring::npos)
-        reinterpret_cast<std::vector<HWND>*>(data)->push_back(window);
+    wchar_t windowClass[256]{};
+    GetClassNameW(window,windowClass,256);
+    auto& search=*reinterpret_cast<VfbSearch*>(data);
+    if(CaptureRegion::MatchesVfb(search.target,caption,windowClass)) search.windows.push_back(window);
     return TRUE;
 }
 CaptureRegion::Rect VfbClientRect(HWND window) {
     DWORD process=0; GetWindowThreadProcessId(window,&process);
     if(!IsWindow(window) || process!=GetCurrentProcessId() || !IsWindowVisible(window) || IsIconic(window))
-        throw std::runtime_error("V-Ray frame buffer became unavailable");
+        throw std::runtime_error("Frame buffer became unavailable");
     RECT client{}; POINT origin{};
     if(!GetClientRect(window,&client) || !ClientToScreen(window,&origin))
-        throw std::runtime_error("Could not locate V-Ray frame buffer client area");
+        throw std::runtime_error("Could not locate frame buffer client area");
     return {origin.x,origin.y,client.right-client.left,client.bottom-client.top};
 }
 struct ScreenPixels {
@@ -878,7 +879,7 @@ std::string NativeHandlers::CaptureScreen(const std::string& params, MCPBridgeGU
     const json p=json::parse(params);
     if(!p.is_object()) throw std::runtime_error("Expected object payload");
     const std::string target=p.value("target","screen");
-    if(target!="screen" && target!="vray_vfb") throw std::runtime_error("target must be screen or vray_vfb");
+    if(target!="screen" && target!="vray_vfb" && target!="corona_vfb") throw std::runtime_error("target must be screen, vray_vfb or corona_vfb");
     const int maxWidth=p.value("max_width",1600), maxHeight=p.value("max_height",0);
     if(maxWidth<0 || maxHeight<0 || maxWidth>8192 || maxHeight>8192)
         throw std::runtime_error("Capture maximum dimensions must be between 0 and 8192");
@@ -886,12 +887,12 @@ std::string NativeHandlers::CaptureScreen(const std::string& params, MCPBridgeGU
     HWND window=nullptr;
     CaptureRegion::Rect targetRect{0,0,GetSystemMetrics(SM_CXSCREEN),GetSystemMetrics(SM_CYSCREEN)};
     json windowInfo=nullptr;
-    if(target=="vray_vfb") {
-        std::vector<HWND> windows;
-        EnumWindows(FindVfbWindow,reinterpret_cast<LPARAM>(&windows));
-        if(windows.empty()) throw std::runtime_error("No visible V-Ray frame buffer in this Max instance; open or restore its VFB first");
-        if(windows.size()!=1) throw std::runtime_error("AMBIGUOUS: multiple visible V-Ray frame buffers in this Max instance");
-        window=windows.front(); targetRect=VfbClientRect(window);
+    if(target!="screen") {
+        VfbSearch search{target,{}};
+        EnumWindows(FindVfbWindow,reinterpret_cast<LPARAM>(&search));
+        if(search.windows.empty()) throw std::runtime_error("No visible "+target+" in this Max instance; open or restore its VFB first");
+        if(search.windows.size()!=1) throw std::runtime_error("AMBIGUOUS: multiple visible "+target+" windows in this Max instance");
+        window=search.windows.front(); targetRect=VfbClientRect(window);
         wchar_t caption[1024]{}; GetWindowTextW(window,caption,1024);
         windowInfo={{"handle",std::to_string(reinterpret_cast<uintptr_t>(window))},{"title",WideToUtf8(caption)},
             {"process_id",GetCurrentProcessId()},{"area","client"}};
@@ -908,7 +909,7 @@ std::string NativeHandlers::CaptureScreen(const std::string& params, MCPBridgeGU
     // Reject a moved/resized/replaced window rather than return a crop of the
     // wrong region when the user changes the layout during capture.
     if(window && CaptureRegion::Json(VfbClientRect(window))!=CaptureRegion::Json(targetRect))
-        throw std::runtime_error("V-Ray frame buffer moved during capture; retry");
+        throw std::runtime_error("Frame buffer moved during capture; retry");
     auto bitmap=std::unique_ptr<Gdiplus::Bitmap>(Gdiplus::Bitmap::FromHBITMAP(pixels.bitmap,nullptr));
     if(!bitmap || bitmap->GetLastStatus()!=Gdiplus::Ok) throw std::runtime_error("Could not read captured pixels");
     bitmap.reset(ResizeBitmapToMax(bitmap.release(),maxWidth,maxHeight));

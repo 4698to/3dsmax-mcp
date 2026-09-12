@@ -56,6 +56,7 @@ Debugging:
 - `walk_references` — trace dependencies from a live object
 - `watch_scene` — track user actions during an interactive session
 - `execute_maxscript` — fallback only when no dedicated tool exists
+- `execute_python(code)` — embedded Python fallback with `pymxs`; assign a JSON-compatible `result` to return a value alongside stdout/stderr. Requires bridge safe mode off. Calls have fresh variables and one undo step for undoable scene edits; uncaught errors roll those edits back and return a traceback. File I/O and other non-undoable effects persist.
 
 ## Scene Organization
 
@@ -110,13 +111,13 @@ Debugging:
 - OSL: `write_osl_shader`
 
 ### Material notes
-- `create_material_from_textures` and `smart_import` default to **OpenPBR**. Pass `material_class` for Physical, Arnold, Redshift, V-Ray, MaterialX, Octane, etc. (see tool tripback `hint.renderers`).
+- `create_material_from_textures` and `smart_import` default to **OpenPBR**. Pass `material_class` for Physical, Arnold, Redshift, V-Ray, CoronaPhysicalMtl, MaterialX, Octane, etc. (see tool tripback `hint.renderers`). `palette_laydown` honors it for both single-image previews and grouped PBR sets.
 - `create_shell_material` wraps two scene materials in `Shell_Material` (render slot 0, export/viewport slot 1), or builds from `texture_folder` with `render_material_class` / `export_material_class`. Shell is a container, not a renderer.
 
 ### Viewport
 - `agent_viewport(action="open")` reserves a shaded floating **AGENT VIEWPORT**. After opening, navigation and capture default to it. `start_minimized=true` parks it initially; `minimize`/`restore` park it between inspections. Captures require a visible on-screen panel and explicitly refuse while minimized. `status` reports `capture_ready`; `release` closes only the owned panel. Initial opening may briefly activate the panel before restoring user focus.
 - `agent_viewport` also frames hierarchies, orbits (yaw/pitch degrees), pans (view-plane scene units), zooms (factor<1 closer), and picks surfaces (normalized image x/y, top-left origin). Pass the single capture's `view_token` as `expected_view` for picking; then inspect the hit node near its world point before editing base-cage components. View/scene changes invalidate the token; mesh IDs still require `expected_mesh`.
-- Interactive preview: `agent_viewport(action="render", mode="activeshade"|"vray_ipr"|"vray_vfb"|"shaded")`. ActiveShade uses the assigned ActiveShade renderer (`renderer_source="production"` uses production if compatible). V-Ray previews enable progressive IPR and denoising; `vray_vfb` locks the VFB to the agent view. Start only when rendering is requested. Existing renders elsewhere are refused. Wait for `session_state="running"`, then use `action="capture"` or `"stop_capture"` (save image, then stop). Optional `crop=[x,y,width,height]` trims VFB pixels. Return to shaded before component targeting or minimizing. Captures do not certify convergence or completed denoising.
+- Interactive preview: `agent_viewport(action="render", mode="activeshade"|"vray_ipr"|"vray_vfb"|"corona_vfb"|"shaded")`. ActiveShade uses the assigned ActiveShade renderer (`renderer_source="production"` uses production if compatible). V-Ray previews enable progressive IPR and denoising. `vray_vfb` and `corona_vfb` lock the VFB to the agent view; Corona uses the current production renderer and preserves its denoising settings. Start only when rendering is requested. Existing renders elsewhere are refused. Wait for `session_state="running"`, then use `action="capture"` or `"stop_capture"` (save image, then stop). Optional `crop=[x,y,width,height]` trims VFB pixels. Return to shaded before component targeting or minimizing. Captures do not certify convergence or completed denoising.
 - Picking supports visible thick splines as well as geometry and returns a world surface normal. Use `draw_spline(action="get")` for spline knots. On thin panels, narrow face inspection by proximity and normal to separate the front from the back; frame the part before capturing labels.
 - Aim/frame: `set_viewport` — world-space `eye` + `target`, named elevations, or `frame_names`; no camera node is created
 - Fast: `capture_viewport`
@@ -124,8 +125,15 @@ Debugging:
 - `source="agent"` requires the agent panel; `source="active"` explicitly targets the user's active view. The default `auto` uses the agent panel once opened, and fails if that owned panel becomes unavailable instead of redirecting into the user's viewport. Release and reopen after a scene load or layout replacement.
 - `inspect_mesh(capture=true)` uses the agent panel when open, drawing component labels into the saved image without adding overlays to the user's viewport.
 - Fullscreen: `capture_screen` (requires `enabled=True`)
-- V-Ray frame-buffer screen crop: `capture_screen(enabled=True, target="vray_vfb")`; optional `crop=[x,y,width,height]` trims inside its client area in physical pixels before resizing. The VFB must be visible and on screen; overlapping windows appear in the capture. No render is started by capture.
+- Frame-buffer screen crop: `capture_screen(enabled=True, target="vray_vfb"|"corona_vfb")`; optional `crop=[x,y,width,height]` trims inside its current client area in physical pixels before resizing. Recheck dimensions after resizing the VFB. It must be visible and on screen; overlapping windows appear in the capture. No render is started by capture.
 - Blocked production render recovery: `render_automations(action="cancel_capture", job_id=...)` saves visible VFB pixels and requests cancellation for the production job you armed and started. `capture_target="screen"` supports an explicit desktop crop for another renderer. Configure progressive sampling and its denoiser before starting; recovery cannot change blocked render settings. Cancellation is cooperative; check the done-signal separately and treat the image as partial.
+
+### Cosmos assets
+- `cosmos_search` finds models, materials and HDRIs compatible with the selected Max instance and renderer.
+- `cosmos_download` caches an asset without importing it; ready means completed, queued/downloading means call again to wait.
+- `cosmos_import` downloads if needed, then imports through the renderer and returns asset-scoped nodes/materials/maps with file checks. Selection is preserved.
+- Use returned node refs with existing transform, layer and instance tools. Materials/HDRIs may create editor resources instead of scene nodes.
+- Sign in through Cosmos when requested. If an import returns unknown/unverified, inspect before retrying; repeating a completed model import creates another instance.
 
 ### External .max files (no scene load)
 - `inspect_max_file`, `search_max_files`, `merge_from_file`, `batch_file_info`

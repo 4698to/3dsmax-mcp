@@ -32,6 +32,14 @@ _OCTANE_CH_B = 2
 
 # Renderer wiring configs and slot mappings
 _PBR_SLOT_CANDIDATES: dict[str, dict[str, list[str]]] = {
+    "corona": {
+        "diffuse": ["baseTexmap"], "ao": ["baseTexmap"],
+        "roughness": ["baseRoughnessTexmap"], "glossiness": ["baseRoughnessTexmap"],
+        "metallic": ["metalnessTexmap"], "normal": ["baseBumpTexmap"],
+        "bump": ["baseBumpTexmap"], "displacement": ["displacementTexmap"],
+        "opacity": ["opacityTexmap"], "emission": ["selfIllumTexmap"],
+        "translucency": ["translucencyColorTexmap"],
+    },
     "openpbr": {
         "diffuse":      ["base_color_map", "baseColor_map", "basecolor_map", "base_map", "diffuse_map"],
         "ao":           ["base_color_map", "baseColor_map", "basecolor_map", "base_map", "diffuse_map"],
@@ -167,6 +175,7 @@ RENDERER_LABELS: dict[str, str] = {
     "arnold": "Arnold ai_standard_surface",
     "redshift": "Redshift RS_Standard_Material",
     "vray": "V-Ray VRayMtl",
+    "corona": "Corona CoronaPhysicalMtl",
     "octane_standard": "Octane Std Surface (Std_Surface_Mtl)",
     "octane_pbr": "Octane Open PBR Surface (Open_PBR_Surf__Mtl)",
     "octane_universal": "Octane Universal (Universal_material)",
@@ -184,7 +193,7 @@ def _ms_name_array(values: list[str]) -> str:
 
 def groups_need_uberbitmap_osl(groups: list[dict], renderer: str) -> bool:
     """True when the legacy UberBitmap2 OSL helper is needed for ORM splits."""
-    if renderer == "materialx" or renderer.startswith("octane"):
+    if renderer in {"materialx", "corona"} or renderer.startswith("octane"):
         return False
     return any("orm" in group["channels"] for group in groups)
 
@@ -236,6 +245,27 @@ def pbr_renderer_setup_lines(
 ) -> list[str]:
     """Renderer-specific top-level setup (OSL paths, MaterialX OSL helpers, …)."""
     lines: list[str] = []
+    if renderer == "corona":
+        lines.extend([
+            "fn mcp_coronaBitmap path nodeName rawData = (",
+            "    local b = undefined",
+            "    local mode = try (ColorPipelineMgr.Mode) catch (#Gamma)",
+            "    if rawData and (mode == #OCIO_Default or mode == #OCIO_Custom) then (",
+            "        local rawSpace = undefined",
+            "        for space in ColorPipelineMgr.GetFileIOColorSpaceList() where rawSpace == undefined do (",
+            '            if findItem #("raw", "utility - raw") (toLower space) > 0 do rawSpace = space',
+            "        )",
+            '        if rawSpace == undefined do throw "Cannot identify a Raw input color space for Corona data textures in this OCIO configuration"',
+            "        b = openBitmap path colorSpace:rawSpace",
+            '        if b == undefined do throw ("Could not read texture: " + path)',
+            '        if b.colorSpaceStatus != #normal do throw ("Raw texture color space was not accepted: " + path)',
+            "    ) else (",
+            "        b = if rawData then openBitmap path gamma:1.0 else openBitmap path",
+            "    )",
+            '    if b == undefined do throw ("Could not read texture: " + path)',
+            "    Bitmaptexture name:nodeName bitmap:b",
+            ")",
+        ])
     if renderer == "materialx":
         lines.extend([
             "fn mcp_materialXOslRoot = (",
@@ -292,6 +322,11 @@ def pbr_per_group_lines(
         lines.append(f'    local {mat_var} = ai_standard_surface name:"{mat_name}"')
     elif renderer == "redshift":
         lines.append(f'    local {mat_var} = RS_Standard_Material name:"{mat_name}"')
+    elif renderer == "corona":
+        lines.append(f'    local {mat_var} = CoronaPhysicalMtl name:"{mat_name}"')
+        # Corona inherits this preference from System Settings; do not inherit
+        # a user's glossiness default for roughness texture imports.
+        lines.append(f"    {mat_var}.roughnessMode = 0")
     elif renderer == "octane_standard":
         lines.append(f'    local {mat_var} = Std_Surface_Mtl name:"{mat_name}"')
     elif renderer == "octane_pbr":
@@ -311,6 +346,15 @@ def pbr_per_group_lines(
     map_vars: dict[str, str] = {}
 
     def add_wire(slot_var: str, channel_label: str, tex_var: str, candidates: list[str]) -> None:
+        if renderer == "corona":
+            slot = candidates[0]
+            lines.extend([
+                f"    {mat_var}.{slot} = {tex_var}",
+                f"    {mat_var}.{slot}On = true",
+                f'    if {mat_var}.{slot} != {tex_var} do throw "Corona map assignment did not persist: {slot}"',
+                f'    channelList += "{channel_label}->{slot}, "',
+            ])
+            return
         lines.extend([
             f"    local {slot_var} = mcp_setFirstMap {mat_var} {_ms_name_array(candidates)} {tex_var}",
             f"    mcp_enableMapSlot {mat_var} {slot_var}",
@@ -345,6 +389,13 @@ def pbr_per_group_lines(
             lines.append(f'    local {var} = Image_MTX()')
             lines.append(f'    {var}.name = "{tex_name}"')
             lines.append(f'    {var}.filename = @"{path_literal}"')
+        elif renderer == "corona":
+            # Native Bitmap is supported by Corona and lets the input transfer
+            # be explicit without inventing CoronaBitmap color-space enums.
+            # Color inputs keep Max's input color policy; scalar/normal inputs
+            # are raw data, including packed channel maps.
+            raw = "true" if channel not in _COLOR_CHANNELS else "false"
+            lines.append(f'    local {var} = mcp_coronaBitmap @"{path_literal}" "{tex_name}" {raw}')
         else:
             lines.append(f'    local {var} = Bitmaptexture name:"{tex_name}" filename:@"{path_literal}"')
 
@@ -355,6 +406,20 @@ def pbr_per_group_lines(
         out_r = f"{prefix}_orm_r"
         out_g = f"{prefix}_orm_g"
         out_b = f"{prefix}_orm_b"
+        if renderer == "corona":
+            add_bitmap(uber, "orm", fpath)
+            # ColorCorrection's custom channel routing extracts data without
+            # an OSL loader or a renderer-dependent channel-picker plugin.
+            for var, channel in ((out_r, 0), (out_g, 1), (out_b, 2)):
+                lines.extend([
+                    f'    local {var} = ColorCorrection name:"{tex_name}_channel_{channel}"',
+                    f"    {var}.map = {uber}",
+                    f"    {var}.rewireMode = 3",
+                    f"    {var}.rewireR = {channel}",
+                    f"    {var}.rewireG = {channel}",
+                    f"    {var}.rewireB = {channel}",
+                ])
+            return {"ao": out_r, "roughness": out_g, "metallic": out_b}
         if renderer == "materialx":
             lines.extend([
                 f'    local {uber} = mcp_makeMaterialXOslMap "tiledimage_color3.osl" "{tex_name}"',
@@ -535,6 +600,15 @@ def pbr_per_group_lines(
             ])
             if "bump" in map_vars:
                 lines.append(f"    {final_normal}.bump_map = {map_vars['bump']}")
+        elif renderer == "corona":
+            final_normal = f"g{idx}_normal_node"
+            lines.extend([
+                f'    local {final_normal} = CoronaNormal name:"NormalMap"',
+                f"    {final_normal}.normalMap = {map_vars['normal']}",
+                f"    {final_normal}.addGamma = false",
+            ])
+            if "bump" in map_vars:
+                lines.append(f"    {final_normal}.additionalBump = {map_vars['bump']}")
         elif is_octane:
             # Octane materials have both normal_tex and bump_tex slots; wire each directly.
             # Bump is wired below in its own block when also present.
@@ -576,7 +650,7 @@ def pbr_per_group_lines(
                 f"    {bump_node}.input_map = {map_vars['bump']}",
                 f"    {bump_node}.inputType = 0",
             ])
-        elif renderer == "vray":
+        elif renderer in {"vray", "corona"}:
             bump_node = map_vars["bump"]
         elif is_octane:
             bump_node = map_vars["bump"]
@@ -600,6 +674,10 @@ def pbr_per_group_lines(
             lines.append(f'    skippedList += "{channel}, "')
             continue
         wire_var = map_vars[channel]
+        if renderer == "corona" and channel == "emission":
+            lines.append(f"    {mat_var}.selfIllumLevel = 1.0")
+        if renderer == "corona" and channel == "translucency":
+            lines.extend([f"    {mat_var}.useThinMode = true", f"    {mat_var}.translucencyFraction = 0.5"])
         if channel == "displacement" and is_octane:
             # Octane's displacement slot rejects raw Image_MTX; wrap in Texture_displacement.
             td_var = f"g{idx}_disp_node"

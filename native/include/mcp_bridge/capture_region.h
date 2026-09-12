@@ -1,8 +1,27 @@
 #pragma once
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <algorithm>
+#include <cwctype>
+#include <string>
 
 namespace CaptureRegion {
+inline bool MatchesVfb(const std::string& target, std::wstring title, std::wstring windowClass) {
+    const auto lower=[](wchar_t c) { return std::towlower(c); };
+    std::transform(title.begin(),title.end(),title.begin(),lower);
+    std::transform(windowClass.begin(),windowClass.end(),windowClass.begin(),lower);
+    if(target=="corona_vfb") {
+        // VFB 2 has a product/version caption rather than the text "VFB".
+        // Require its renderer-owned Qt class and frame metadata so a Corona
+        // toolbar, settings dialog, or .max filename cannot become the target.
+        const bool modern=title.rfind(L"corona ",0)==0 &&
+            windowClass.find(L"legionqtqwindow")!=std::wstring::npos &&
+            title.find(L" | camera:")!=std::wstring::npos && title.find(L" | frame ")!=std::wstring::npos;
+        return modern || title==L"corona vfb" || title.rfind(L"corona vfb |",0)==0;
+    }
+    return target=="vray_vfb" && (title.find(L"v-ray frame buffer")!=std::wstring::npos ||
+        title.find(L"v-ray virtual frame buffer")!=std::wstring::npos);
+}
 // Physical pixels. Crop coordinates are relative to the unscaled target.
 struct Rect { int x, y, width, height; };
 inline Rect Crop(Rect target, const nlohmann::json& crop) {

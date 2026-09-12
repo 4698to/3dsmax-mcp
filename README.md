@@ -11,7 +11,7 @@ Connect AI agents to Autodesk 3ds Max through the [Model Context Protocol](https
 
 Automate everything!
 
-**Current release: 1.6.8** — see [CHANGELOG.md](docs/CHANGELOG.md).
+**Current release: 1.7.0** — see [CHANGELOG.md](docs/CHANGELOG.md).
 
 ## Features
 
@@ -28,7 +28,7 @@ Automate everything!
 ## Quick start
 
 1. Close 3ds Max and fully exit your AI clients.
-2. Run `3dsmax-mcp-1.6.8-Setup.exe` and select your clients.
+2. Run `3dsmax-mcp-1.7.0-Setup.exe` and select your clients.
 3. Open 3ds Max and restart your AI client.
 
 The installer includes Python, dependencies, native bridges and agent skills.
@@ -54,6 +54,56 @@ Use the default **Full** tool profile. To update, run `git pull`, `uv sync`, the
 
 See [Advanced configuration](docs/ADVANCED.md) for manual client setup and tool profiles.
 
+
+## Some ideas for you
+
+<details>
+<summary>Explore modeling, materials, and workflow ideas</summary>
+
+### Modeling
+
+**Build editable meshes from a reference**<br>
+Create polygon cages, sweeps, and lofts, then refine their components and check topology.<br>
+Tools: `create_mesh`, `curve_model`, `loft_mesh`, `mesh_edit`, `geometry_qa`
+
+### Materials
+
+**Turn texture folders into a palette**<br>
+Preview textures or build PBR sets in the Material Editor, with filters and library overflow.<br>
+Tool: `palette_laydown`
+
+**Save your material scratchpad**<br>
+Back up Material Editor slots and the current material library to reusable `.mat` files.<br>
+Tools: `get_material_library`, `backup_material_library`
+
+**Create custom materials and textures**<br>
+Wire PBR texture sets, tune material properties, or write procedural OSL textures.<br>
+Tools: `create_material_from_textures`, `assign_material`, `set_material_properties`, `create_texture_map`, `write_osl_shader`
+
+**Make material variants**<br>
+Clone a material graph, remap its textures, and replace materials across the scene.<br>
+Tools: `inspect_material_network`, `replicate_material`, `batch_replace_materials`
+
+### Asset workflows
+
+**Browse an asset library in your scene**<br>
+Batch-import a folder into a grid, filter LODs, and assign matching PBR textures.<br>
+Tool: `smart_import`
+
+**Reuse objects from old scenes**<br>
+Search `.max` files, inspect their contents, and merge just the objects you need.<br>
+Tools: `search_max_files`, `batch_file_info`, `inspect_max_file`, `merge_from_file`
+
+**Move assets between applications**<br>
+Import mesh, CAD, USD, and glTF assets through installed importers. Export through MAXScript and installed exporters, with separate render/export materials where needed.<br>
+Tools: `smart_import`, `execute_maxscript`, `create_shell_material`, `manage_scene`
+
+### Custom tools
+
+**Build your own tools**<br>
+Automate repetitive work with MAXScript, or build procedural geometry and modifiers with Max Creation Graph (MCG). Explore installed classes through introspection and build, compile, and test graphs with the `mcg_*` tools.
+
+</details>
 
 ## Tools
 
@@ -146,6 +196,9 @@ See [Advanced configuration](docs/ADVANCED.md) for manual client setup and tool 
 | `batch_replace_materials` | Batch material replacement |
 | `palette_laydown` | Fill Material Editor palette slots from a texture folder |
 | `smart_import` | Batch-import meshes from a folder with auto PBR assignment |
+| `cosmos_search` | Find compatible Cosmos models, materials and HDRIs |
+| `cosmos_download` | Download a Cosmos asset without importing it |
+| `cosmos_import` | Import a Cosmos asset through Corona or V-Ray |
 
 ### Inspection
 
@@ -188,7 +241,7 @@ MCP resources: `resource://3dsmax-mcp/plugins/{name}/manifest|guide|recipes|gotc
 | `inspect_lights` | Decode actual light settings and linked emission maps |
 | `edit_lights` | Guarded color, output, size, enable and shadow edits |
 
-Providers cover V-Ray, Octane and native photometric emitters. Query capabilities
+Providers cover Corona, V-Ray, Octane and native photometric emitters. Query capabilities
 for the current renderer: shapes, units and environment routes differ. HDRI maps
 and existing procedural skies use the provider's dome or environment binding.
 
@@ -333,6 +386,7 @@ and existing procedural skies use the provider's dome or environment binding.
 | Tool | Description |
 |------|-------------|
 | `execute_maxscript` | Run MAXScript when no dedicated tool exists (respects safe mode) |
+| `execute_python` | Run Python with captured output, JSON results, tracebacks and undo rollback (requires safe mode off) |
 | `invoke_tool` | Call any registered tool from inside Max (testing) |
 
 </details>

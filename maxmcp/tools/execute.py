@@ -1,6 +1,7 @@
 import json
 
 from ..helpers.error_hints import suggest_tools_for_maxscript
+from ..helpers.python_execution import python_execution_script
 from ..server import mcp, client
 
 
@@ -41,3 +42,20 @@ def execute_maxscript(code: str = "", command: str = "") -> str:
         return json.dumps(payload)
 
     return result
+
+
+@mcp.tool()
+def execute_python(code: str) -> str:
+    """Execute Python in 3ds Max; return stdout, stderr and a JSON-compatible value.
+
+    Use when no dedicated tool covers the operation. Runs on Max's main thread
+    with access to pymxs; requires bridge safe_mode=false.
+    Assign `result` to return it in `value` (JSON-compatible; otherwise null).
+    Each call has fresh variables; imported modules remain loaded in Max.
+    Undoable scene edits form one undo step and roll back on an uncaught error.
+    File I/O and other effects outside Max's undo system cannot be rolled back.
+    Python errors include captured output and a traceback in error.details.
+    """
+    if not code.strip():
+        return "Error: provide Python code in the 'code' parameter"
+    return execute_maxscript(code=python_execution_script(code))

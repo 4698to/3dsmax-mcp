@@ -241,6 +241,11 @@ def _group_texture_files_for_pbr(
 
 def _renderer_from_material_class(material_class: str) -> str | None:
     class_lower = (material_class or "").strip().lower()
+    # Resolve before Autodesk PhysicalMaterial's broad legacy alias below.
+    if class_lower in {"corona", "corona_physical", "coronaphysicalmtl", "_coronaphysicalmtl"}:
+        return "corona"
+    if class_lower.lstrip("_").startswith("corona"):
+        return None
     if not class_lower or class_lower in {"openpbr", "openpbrmaterial", "openpbr_material", "openpbr_mtl"}:
         return "openpbr"
     if class_lower in {"materialx", "material_x", "mtlx", "openpbr_materialx", "openpbr+materialx"} or "materialx" in class_lower:

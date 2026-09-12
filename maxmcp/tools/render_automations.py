@@ -154,7 +154,8 @@ def render_automations(
       cancel_capture  Save the visible VFB image, then request cancellation for
                the matching armed job_id, through one independent connection.
                Use only for a render you armed and started. crop=[x,y,width,height]
-               trims physical client-area pixels; capture_target=screen is an
+               trims physical client-area pixels. capture_target=vray_vfb or corona_vfb
+               selects that renderer's frame buffer; capture_target=screen is an
                explicit desktop fallback for another renderer's visible framebuffer.
                Requires the updated bridge. Does not wait for Max or denoising.
                Configure progressive sampling and the renderer's denoiser BEFORE
@@ -172,8 +173,8 @@ def render_automations(
         from .viewport import _validate_screen_crop
         if not job_id:
             raise ValueError("cancel_capture requires the job_id you armed before starting this render")
-        if capture_target not in {"vray_vfb", "screen"}:
-            raise ValueError("capture_target must be vray_vfb or screen")
+        if capture_target not in {"vray_vfb", "corona_vfb", "screen"}:
+            raise ValueError("capture_target must be vray_vfb, corona_vfb or screen")
         if crop is not None:
             _validate_screen_crop(crop)
         payload = {"job_id":job_id, "target":capture_target, "max_width":1600}

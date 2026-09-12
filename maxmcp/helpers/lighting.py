@@ -416,6 +416,18 @@ def compile_corona_environment(plan: Plan, key: str, spec: LightSpec):
     (HDRI) or an existing map such as CoronaSky is bound there directly, without a dome
     node or wrapper. The slot has no multiplier, so output stays at the explicit 1.0."""
     source = spec.environment
+    # Corona can ignore Max's environment slot in favor of its own single-map
+    # or LightMix environment. Guard the actual renderer setting in the same
+    # native transaction, rather than changing the user's environment route.
+    route = api.inspect(owner_ref={"root": "renderer"}, fields=["bg.source"], limit=1)
+    fields = route["properties"]
+    if (tuple(route["identity"]["class_id"]) != CORONA_RENDERER or len(fields) != 1
+            or fields[0].get("property_ref") != prop(1057)
+            or fields[0].get("value_status") != "read" or fields[0].get("value") != 0):
+        raise api.PluginGuardError("UNSUPPORTED_ENVIRONMENT_ROUTE",
+            "Select Corona's 3ds Max settings environment route before binding a scene environment; single-map and LightMix overrides are preserved.")
+    plan.payload.setdefault("guards", []).append({"owner_ref": route["owner_ref"],
+        "expected_schema": route["schema_token"], "expected_state": route["state_token"]})
     if "environment" in plan.payload:
         raise ValueError("Only one scene environment binding can be created in a batch.")
     if not spec.enabled:
@@ -465,7 +477,7 @@ def capabilities(requested="current", detail="summary") -> dict:
               "unsupported": ["automatic renderer switching", "implicit controller replacement", "automatic exposure", "unverified physical conversions"]}
     if family == "corona":
         result["notes"] = ["Corona lights always cast shadows (cast_shadows=false is refused).",
-                           "Environment binds the map itself to the scene environment slot at output 1.0.",
+                           "Environment binds the map itself at output 1.0 and requires Corona's 3ds Max settings environment route; single-map and LightMix overrides are preserved.",
                            "Directional kind creates CoronaSun (body sun, default) or CoronaMoon (body moon); output is Corona's multiplier, orientation is the emission direction. Sky linking, size multiplier and moon phase stay at plugin defaults."]
     if detail == "full": result["light_spec_schema"] = LightSpec.model_json_schema()
     return result
@@ -503,6 +515,12 @@ def inspect_one(owner_ref: dict, family: str | None = None) -> dict:
     identity = api.inspect(owner_ref=owner_ref, fields=["__identity_only__"], limit=1)
     ids = tuple(identity["identity"]["class_id"])
     detected = "vray" if ids == VRAY_LIGHT else "octane" if ids in {OCTANE_LIGHT, OCTANE_ENV} else "photometric" if ids in PHOTOMETRIC.values() else "corona" if ids in {CORONA_LIGHT, CORONA_SUN, CORONA_MOON, CORONA_BITMAP, CORONA_SKY} else None
+    environment_bound = (owner_ref.get("root") == "environment" or
+        identity["owner_ref"].get("root_binding", {}).get("root") == "environment")
+    generic_environment = (identity["identity"].get("superclass_id") == MAP and environment_bound
+        and family == "corona")
+    if generic_environment:
+        detected = "corona"
     if family is not None and family != detected:
         raise ValueError("Light reference provider does not match its actual class.")
     family = detected
@@ -518,7 +536,8 @@ def inspect_one(owner_ref: dict, family: str | None = None) -> dict:
                    else ["on", "intensity", "colorMode", "colorDirect", "blackbodyTemperature", "sizeMultiplier", "targeted"] if ids == CORONA_SUN
                    else ["on", "intensity", "colorFilter", "sizeMultiplier", "phase", "targeted"] if ids == CORONA_MOON
                    else ["filename", "enviroMapping", "gamma", "colorSpace", "wAngle"] if ids == CORONA_BITMAP
-                   else ["intensityMultiplier", "skyModel", "turbidity", "sunSelectionMode", "selectedSun", "cloudsEnable"]),
+                   else ["intensityMultiplier", "skyModel", "turbidity", "sunSelectionMode", "selectedSun", "cloudsEnable"] if ids == CORONA_SKY
+                   else ["__identity_only__"]),
     }.get(family, ["__identity_only__"])
     data = api.inspect(owner_ref=identity["owner_ref"], fields=fields, limit=64)
     ids = tuple(data["identity"]["class_id"])
@@ -587,6 +606,8 @@ def inspect_one(owner_ref: dict, family: str | None = None) -> dict:
                          output={"value": value("intensityMultiplier") if ids == CORONA_SKY else 1.0, "unit": "renderer"})
             state["environment_source"] = {"class_ref": {"superclass_id": MAP, "class_id": list(ids)},
                                            "values": {p["name"]: p.get("value") for p in data["properties"] if p.get("value_status") == "read"}}
+            if ids not in {CORONA_SKY, CORONA_BITMAP}:
+                state["environment_source"]["status"] = "custom_graph_inspect_owner_ref"
     state["decoded"] = family is not None and state.get("kind") is not None
     state["unreadable"] = [{"name": p["name"], "status": p.get("value_status")} for p in data["properties"] if p.get("value_status") != "read"]
     state["light_token"] = {"owner_ref": data["owner_ref"], "schema_token": data["schema_token"], "state_token": data["state_token"]}

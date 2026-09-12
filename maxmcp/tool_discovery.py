@@ -35,6 +35,11 @@ class ToolsetSpec:
 
 TOOLSET_SPECS = (
     ToolsetSpec(
+        "cosmos",
+        "Search, download and import compatible Cosmos models, materials and HDRIs.",
+        ("cosmos",),
+    ),
+    ToolsetSpec(
         "connection",
         "Bridge diagnostics, installed capabilities, session context, and main-thread checks.",
         ("bridge", "capabilities", "session_context", "mainthread"),
@@ -103,7 +108,7 @@ TOOLSET_SPECS = (
     ),
     ToolsetSpec(
         "automation",
-        "Raw MAXScript fallback plus direct invocation and smoke-test drivers.",
+        "MAXScript and Python fallbacks plus direct invocation and smoke-test drivers.",
         ("execute", "tool_test"),
     ),
     ToolsetSpec(

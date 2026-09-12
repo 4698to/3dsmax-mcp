@@ -36,6 +36,7 @@ unsigned long long generation = 0;
 unsigned long long draws = 0;
 bool registered = false;
 bool ownsVFB = false;
+bool ownsCoronaVFB = false;
 bool vfbStarted = false;
 int previousRenderView = -1;
 BOOL previousUseActive = TRUE;
@@ -124,13 +125,13 @@ void RestoreRenderView() {
         ip->SetRendViewID(RS_Production,previousRenderView);
         ip->SetRendUseActiveView(previousUseActive);
     }
-    ownsVFB=false;
+    ownsVFB=false; ownsCoronaVFB=false;
 }
 void SceneChanged(void*, NotifyInfo*) {
     ++generation; viewID=-1;
     // Handles and render-view IDs belong to the old scene. Never apply saved
     // settings through potentially reused handles after a load/reset.
-    ownsVFB=false; vfbStarted=false; previewRenderer=0; addedDenoiser=0;
+    ownsVFB=false; ownsCoronaVFB=false; vfbStarted=false; previewRenderer=0; addedDenoiser=0;
     previewProperties.clear(); previousElementsActive.clear(); previousDenoiserLayerActive.clear();
 }
 void RequireMainThread() {
@@ -225,16 +226,29 @@ MaxSDK::Graphics::IActiveShadeFragment* ShadeFragment() {
 struct RenderState {
     bool activeShade=false, vrayAvailable=false;
     bool vfb=false;
+    bool coronaAvailable=false, coronaVfb=false;
+    int coronaType=0;
     std::string rendererClass;
     int vrayGlobal=0, cpu=0, gpu=0, cpuEnabled=0, gpuEnabled=0;
-    bool Rendered() const { return activeShade || cpu || gpu || vfb; }
-    std::string Mode() const { return vfb ? "vray_vfb" : cpu || gpu ? "vray_ipr" : activeShade ? "activeshade" : "shaded"; }
+    bool Rendered() const { return activeShade || cpu || gpu || vfb || coronaVfb; }
+    std::string Mode() const { return coronaVfb ? "corona_vfb" : vfb ? "vray_vfb" : cpu || gpu ? "vray_ipr" : activeShade ? "activeshade" : "shaded"; }
 };
 
 RenderState ReadRenderState() {
     RenderState state;
     if(auto* renderer=GetCOREInterface()->GetRenderer(RS_Production))
+    {
         state.rendererClass=MaxScriptVisibleClassName(renderer);
+        if(renderer->ClassID()==Class_ID(1655201228u,1379677700u)) {
+            // Chaos Corona MAXScript API: 0 stopped, 1 production, 2 docked IR,
+            // 3 floating VFB IR. Never use stopRender for an unowned session.
+            state.coronaType=std::stoi(RunMAXScript("(CoronaRenderer.CoronaFp.getRenderType()) as string"));
+            if(state.coronaType<0 || state.coronaType>3) throw std::runtime_error("Unknown Corona render type");
+            state.coronaAvailable=true;
+            state.coronaVfb=ownsCoronaVFB && VFBViewIsOurs() && (state.coronaType==0 || state.coronaType==3);
+            if(state.coronaVfb && state.coronaType==3) vfbStarted=true;
+        }
+    }
     if(auto* fragment=ShadeFragment()) state.activeShade=fragment->IsEnabled();
     // Inspect installation before activating any viewport; no missing-function
     // dialogs and no script-defined global callbacks are installed.
@@ -253,7 +267,7 @@ RenderState ReadRenderState() {
     state.vrayAvailable=true;
     // vrayStartIPR posts its launch to Max's UI queue. Keep the pending lease
     // before vrayIsRenderingIPR becomes 1; do not tear down its settings early.
-    state.vfb=VFBViewIsOurs() && (state.vrayGlobal==0 || state.vrayGlobal==1);
+    state.vfb=!ownsCoronaVFB && VFBViewIsOurs() && (state.vrayGlobal==0 || state.vrayGlobal==1);
     if(state.vfb && state.vrayGlobal==1) vfbStarted=true;
     return state;
 }
@@ -263,9 +277,10 @@ json RenderInfo(const RenderState& state) {
         {"vray_viewport_api",state.vrayAvailable},{"vray_ipr_location",state.vrayGlobal},
         // Both CPU and GPU menu checks can be true for one CPU IPR session.
         {"production_renderer",state.rendererClass},
-        {"capture_target",state.vfb ? "vray_vfb" : "agent"},
-        {"session_state",state.vfb ? (state.vrayGlobal==1 ? "running" : vfbStarted ? "stopped" : "starting") : state.Rendered() ? "running" : "stopped"},
-        {"progressive_requested",previewRenderer!=0},{"denoiser_requested",previewRenderer!=0},
+        {"capture_target",state.coronaVfb ? "corona_vfb" : state.vfb ? "vray_vfb" : "agent"},
+        {"session_state",state.coronaVfb ? (state.coronaType==3 ? "running" : vfbStarted ? "stopped" : "starting") : state.vfb ? (state.vrayGlobal==1 ? "running" : vfbStarted ? "stopped" : "starting") : state.Rendered() ? "running" : "stopped"},
+        {"corona_available",state.coronaAvailable},{"corona_render_type",state.coronaType},
+        {"progressive_requested",previewRenderer!=0},{"denoiser_requested",previewRenderer!=0 && !ownsCoronaVFB},
         {"vray_cpu_available",state.cpuEnabled!=0},{"vray_gpu_available",state.gpuEnabled!=0},
         {"targeting_supported",!state.Rendered()},
         {"image_current",state.Rendered() ? json(nullptr) : json(true)},
@@ -288,7 +303,19 @@ void ToggleVRay(int engine, bool desired) {
 
 void StopOwnedRender() {
     const auto state=ReadRenderState();
-    if(ownsVFB) {
+    if(ownsCoronaVFB) {
+        if(!VFBViewIsOurs() || !state.coronaAvailable || (state.coronaType!=0 && state.coronaType!=3))
+            throw std::runtime_error("RENDER_OWNERSHIP_LOST: Corona renderer/view changed; stop that render explicitly");
+        if(state.coronaType==0 && !vfbStarted)
+            throw std::runtime_error("RENDER_STARTING: Corona launch has not been observed; read status before stopping");
+        if(state.coronaType==3) {
+            RunMAXScript("CoronaRenderer.CoronaFp.stopRender()");
+            if(RunMAXScript("(CoronaRenderer.CoronaFp.getRenderType()) as string")!="0")
+                throw std::runtime_error("Corona has not stopped; retry status");
+        }
+        RestoreRenderView();
+    }
+    else if(ownsVFB) {
         if(state.vrayGlobal==0 && !vfbStarted)
             throw std::runtime_error("RENDER_STARTING: VFB launch has not been observed yet; read status again before stopping");
         if(state.vrayGlobal && !state.vfb)
@@ -310,15 +337,18 @@ void StopOwnedRender() {
 void SetRenderMode(const json& p) {
     const std::string mode=p.value("mode","");
     const std::string rendererSource=p.value("renderer_source","activeshade");
-    if(mode!="shaded" && mode!="activeshade" && mode!="vray_ipr" && mode!="vray_vfb")
-        throw std::runtime_error("mode must be shaded, activeshade, vray_ipr, or vray_vfb");
+    if(mode!="shaded" && mode!="activeshade" && mode!="vray_ipr" && mode!="vray_vfb" && mode!="corona_vfb")
+        throw std::runtime_error("mode must be shaded, activeshade, vray_ipr, vray_vfb, or corona_vfb");
     if(rendererSource!="activeshade" && rendererSource!="production")
         throw std::runtime_error("renderer_source must be activeshade or production");
     if(theHold.Holding()) throw std::runtime_error(StructuredErrorPayload("USER_BUSY",
         "Finish the current user operation before switching interactive rendering",{{"retryable",true}}));
     const auto state=ReadRenderState();
-    if(mode==state.Mode() && !(mode=="shaded" && (ownsVFB || previewRenderer))) return;
+    if(mode==state.Mode() && !(mode=="shaded" && (ownsVFB || previewRenderer)) &&
+       !(mode=="corona_vfb" && state.coronaType==0 && vfbStarted)) return;
     if(mode!="shaded") {
+        if(state.coronaType!=0 && !state.coronaVfb)
+            throw std::runtime_error("RENDER_BUSY: Corona is already rendering outside this owned preview");
         if(state.vrayGlobal!=0 && !state.cpu && !state.gpu && !state.vfb)
             throw std::runtime_error("RENDER_BUSY: V-Ray IPR is running outside AGENT VIEWPORT; stop it there first");
         auto* manager=static_cast<MaxSDK::IActiveShadeFragmentManager*>(GetCOREInterface(IACTIVE_SHADE_VIEWPORT_MANAGER_INTERFACE));
@@ -329,6 +359,8 @@ void SetRenderMode(const json& p) {
             throw std::runtime_error("RENDER_BUSY: another ActiveShade session is running");
     }
     int engine=0;
+    if(mode=="corona_vfb" && !state.coronaAvailable)
+        throw std::runtime_error("UNSUPPORTED: select Corona as the production renderer first");
     if(mode=="vray_ipr" || mode=="vray_vfb") {
         if(!state.vrayAvailable || (!state.cpuEnabled && !state.gpuEnabled))
             throw std::runtime_error("UNSUPPORTED: select V-Ray or V-Ray GPU as the production renderer first");
@@ -342,7 +374,27 @@ void SetRenderMode(const json& p) {
     }
     StopOwnedRender();
     try {
-        if(mode=="vray_ipr" || mode=="vray_vfb") {
+        if(mode=="corona_vfb") {
+            const auto shown=RunMAXScript("(CoronaRenderer.CoronaFp.showVfb true) as string");
+            if(shown!="0") throw std::runtime_error("Corona could not show its VFB (status "+shown+")");
+            auto* ip=GetCOREInterface16();
+            previewRenderer=Animatable::GetHandleByAnim(GetCOREInterface()->GetRenderer(RS_Production));
+            previousRenderView=ip->GetRendViewID(RS_Production);
+            previousUseActive=ip->GetRendUseActiveView();
+            ip->SetRendViewID(RS_Production,viewID);
+            ip->SetRendUseActiveView(FALSE); ownsVFB=true; ownsCoronaVFB=true; vfbStarted=false;
+            ActivateOwnedView activation;
+            const auto started=RunMAXScript("(CoronaRenderer.CoronaFp.startInteractive()) as string");
+            if(started!="0") {
+                // An explicit launch failure must not leave a pending lease
+                // that can never be stopped because rendering never began.
+                if(RunMAXScript("(CoronaRenderer.CoronaFp.getRenderType()) as string")=="0") {
+                    RestoreRenderView(); RestorePreviewSettings();
+                }
+                throw std::runtime_error("Corona IPR did not start (status "+started+")");
+            }
+        }
+        else if(mode=="vray_ipr" || mode=="vray_vfb") {
             PrepareVRayPreview();
             if(mode=="vray_ipr") ToggleVRay(engine,true);
             else {

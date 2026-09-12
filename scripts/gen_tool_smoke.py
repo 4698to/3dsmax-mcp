@@ -31,6 +31,9 @@ FLAG_EXPECT_ERROR = 2
 
 # Skipped unless run_tool_smoke(include_skipped=True) / native includeSkipped
 SKIP_DEFAULT = {
+    "cosmos_search",
+    "cosmos_download",
+    "cosmos_import",
     "create_lights",
     "inspect_lights",
     "edit_lights",
@@ -87,6 +90,7 @@ SKIP_DEFAULT = {
     "watch_scene",
     "discover_plugin_classes",
     "execute_maxscript",
+    "execute_python",
     # Compatibility aliases stay callable but are not part of the default smoke pass.
     "inspect_modifier_properties",
 }
@@ -94,6 +98,7 @@ SKIP_DEFAULT = {
 # Explicit inputs — ${SMOKE_TARGET} / ${SMOKE_SPAWN} replaced at runtime.
 CUSTOM: dict[str, dict] = {
     "execute_maxscript": {"code": "42"},
+    "execute_python": {"code": "result = 42"},
     "manage_scene": {"action": "info"},
     "manage_layers": {"action": "list"},
     "manage_groups": {"action": "list"},
