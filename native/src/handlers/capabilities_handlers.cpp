@@ -37,6 +37,15 @@ bool MatchesAny(
     return false;
 }
 
+bool StartsWithAny(
+    const std::string& value,
+    std::initializer_list<const char*> prefixes) {
+    for (const char* prefix : prefixes) {
+        if (value.rfind(prefix, 0) == 0) return true;
+    }
+    return false;
+}
+
 std::vector<std::string> MaxScriptClassNames(SClass_ID superClassId) {
     struct ScriptClassEntry {
         Class_ID classId;
@@ -123,7 +132,13 @@ void DetectKnownPlugin(
 
         if (name == "tyflow") tyFlow = true;
         if (MatchesAny(name, {"railclonepro", "railclone"})) railClone = true;
-        if (name == "phoenixfdliquid") phoenixFD = true;
+        // Phoenix FD registers every class under a PHX* or PhoenixFD* prefix
+        // (PHXSimulator, PHXFoam, PhoenixFDPartSys, PhoenixFD_Force, ...).
+        // The single legacy name is kept for older Phoenix builds.
+        if (name == "phoenixfdliquid" ||
+            StartsWithAny(name, {"phx", "phoenixfd"})) {
+            phoenixFD = true;
+        }
     }
 }
 
@@ -162,8 +177,8 @@ std::string NativeHandlers::GetPluginCapabilities(
                     "Capabilities failed reading the current renderer MAXClass");
             }
             if (currentRendererName.empty()) {
-                currentRendererName = WideToUtf8(
-                    currentRenderer->ClassName().data());
+                currentRendererName = SanitizeScriptName(WideToUtf8(
+                    currentRenderer->ClassName().data()));
             }
         }
         result["renderer"] = currentRendererName;
