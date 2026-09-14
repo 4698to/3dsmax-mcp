@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- Added a guarded ProBoolean fallback for Boolean operations in Max 2023, with explicit backend selection.
+
 ## [1.7.1] — 2026-09-14
 
 - Added FStorm and FStormPBR material workflows, area lights, solar sun controls and cropped IPR capture.

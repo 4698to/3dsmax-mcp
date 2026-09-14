@@ -1,4 +1,4 @@
-"""Boolean modeling via the modern Boolean modifier (BooleanMod, Max 2022+).
+"""Boolean modeling via BooleanMod (Max 2024+) or ProBoolean (Max 2023).
 
 One tool, action-dispatched: apply operands (union/subtract/intersect/...),
 list the operand stack, retune/rename/disable an operand, remove or extract
@@ -183,6 +183,133 @@ def _find_boolmod() -> str:
     )
 
 
+def _boolean_backend(name: str, backend: str) -> str:
+    if backend != "auto":
+        return backend
+    # Query the selected Max each time; routing must not survive an instance switch.
+    return _run(f'''(local obj = getNodeByName "{safe_string(name)}"
+        if obj != undefined and classof obj.baseobject == ProBoolean then "proboolean"
+        else if isKindOf BooleanMod MAXClass then "modifier" else "proboolean")''')
+
+
+def _apply_proboolean(safe, ops, per_op, cut_instances, cutter_block, use_operand_material):
+    supported = {"#union": 0, "#intersection": 1, "#subtraction": 2, "#merge": 3}
+    enums = per_op + [c["enum"] for c in cut_instances]
+    if any(op not in supported for op in enums):
+        return _err("ProBoolean supports union, subtract, intersect and merge only")
+    names_arr = "#(" + ",".join(f'"{safe_string(n)}"' for n in ops) + ")"
+    enums_arr = "#(" + ",".join(per_op) + ")"
+    inline_names = "#(" + ",".join(f'"{safe_string(c["name"])}"' for c in cut_instances) + ")"
+    cutter_block = cutter_block.replace("c.name = d[1]", "append scratch c\n                c.name = d[1]")
+    raw = _run(f'''(
+        local ownsHold = false
+        local stage = undefined
+        local staged = false
+        local scratch = #()
+        local savedSelection = selection as array
+        try (
+            if theHold.Holding() do throw "USER_BUSY: an undo operation is active"
+            fn uniqueNode nm = (
+                local found = getNodeByName nm exact:true all:true
+                if found.count != 1 do throw ("Object name must resolve uniquely: " + nm)
+                found[1]
+            )
+            local original = uniqueNode "{safe}"
+            if superclassof original != GeometryClass do throw "Base object must be geometry"
+            if not isKindOf ProBoolean MAXClass do throw "ProBoolean is unavailable"
+            local opNames = {names_arr}
+            local opEnums = {enums_arr}
+            for nm in {inline_names} do (
+                if getNodeByName nm != undefined do throw ("Cutter name already exists: " + nm)
+            )
+            local originals = for nm in opNames collect uniqueNode nm
+            for n in originals do (
+                if n == original do throw "Base cannot be its own operand"
+                if superclassof n != GeometryClass do throw "Operand must be geometry"
+            )
+            local instances = #()
+            InstanceMgr.GetInstances original &instances
+            if instances.count > 1 do throw "Instanced bases require Make Unique first"
+            if original.modifiers.count > 0 do throw "ProBoolean requires a base without modifiers; preserve the stack by using a separate copy"
+            local madeNew = classof original.baseobject != ProBoolean
+            -- PolyBoolean commits its own holds and consumes even reference operands.
+            -- Run it only on owned copies with recording off, then adopt the result
+            -- in a separate hold which contains no PolyBoolean API calls.
+            undo off (
+                stage = copy original
+                staged = true
+                append scratch stage
+                if stage.material != undefined do stage.material = copy stage.material
+                local obj = stage
+                local opNodes = #()
+                for n in originals do (
+                    local c = copy n
+                    append scratch c
+                    c.name = n.name
+                    if c.material != undefined do c.material = copy c.material
+                    append opNodes c
+                )
+                {cutter_block}
+                for n in opNodes do appendIfUnique scratch n
+                if madeNew do ProBoolean.SetOperandA obj
+                if classof obj.baseobject != ProBoolean do throw "ProBoolean conversion failed"
+                if ProBoolean.GetCookieCut obj or ProBoolean.GetImprint obj do throw "Existing ProBoolean cookie/imprint mode is unsupported"
+                if ProBoolean.GetUpdateMode obj != 0 or not ProBoolean.GetDisplayResult obj do throw "ProBoolean requires automatic updates and result display"
+                for i = 1 to opNodes.count do (
+                    local operation = case opEnums[i] of (
+                        #union: 0; #intersection: 1; #subtraction: 2; #merge: 3
+                    )
+                    local before = obj.baseobject.numsubs
+                    ProBoolean.SetBoolOp obj operation
+                    ProBoolean.SetOperandB obj opNodes[i] 2 {0 if use_operand_material else 1}
+                    if obj.baseobject.numsubs <= before do throw "ProBoolean did not append the operand"
+                    if isValidNode opNodes[i] do throw "ProBoolean did not consume the scratch operand"
+                )
+            )
+            local tris = (GetTriMeshFaceCount stage)[1]
+            local resultObject = stage.baseobject
+            local resultMaterial = {'stage.material' if use_operand_material else 'original.material'}
+            if theHold.Holding() do throw "USER_BUSY: an undo operation is active"
+            theHold.Begin(); ownsHold = true
+            original.baseobject = resultObject
+            original.material = resultMaterial
+            for n in originals do delete n
+            if original.baseobject != resultObject do throw "ProBoolean assignment failed"
+            local answer = "OK|" + (madeNew as string) + "|" + (tris as string)
+            theHold.Accept "MCP ProBoolean"; ownsHold = false
+            undo off (for n in scratch where isValidNode n do delete n)
+            undo off (
+                clearSelection()
+                local surviving = for n in savedSelection where isValidNode n collect n
+                if surviving.count > 0 do select surviving
+            )
+            answer
+        ) catch (
+            local detail = getCurrentException() as string
+            if ownsHold do theHold.Cancel()
+            undo off (for n in scratch where isValidNode n do delete n)
+            if staged do undo off (
+                clearSelection()
+                local surviving = for n in savedSelection where isValidNode n collect n
+                if surviving.count > 0 do select surviving
+            )
+            "__ERROR__|" + detail
+        )
+    )''')
+    if raw.startswith("__ERROR__|"):
+        return _err(raw.split("|", 1)[1])
+    parts = raw.split("|")
+    if len(parts) != 3 or parts[0] != "OK":
+        return _err(f"unexpected ProBoolean reply: {raw[:200]}")
+    names = ops + [c["name"] for c in cut_instances]
+    result = {"backend": "proboolean", "class": "ProBoolean", "new_compound": parts[1] == "true",
+              "appended": names, "tris": int(parts[2]), "live": False}
+    if cut_instances:
+        result["cutters_created"] = [c["name"] for c in cut_instances]
+    result["consumed"] = names
+    return result
+
+
 @mcp.tool()
 def boolean_operation(
     action: str = "apply",
@@ -202,6 +329,7 @@ def boolean_operation(
     operand_index: int = 0,
     rename: str = "",
     disable: Optional[bool] = None,
+    backend: str = "auto",
 ) -> Any:
     """Boolean modeling on a base object via the Boolean modifier (BooleanMod).
 
@@ -230,11 +358,28 @@ def boolean_operation(
 
     Use when: cutting holes, insets, panel lines, or fusing parts on geometry.
     Not when: collapsing the result (collapse_modifier_stack) or spline booleans.
+
+    backend: auto uses BooleanMod when available (2024+), otherwise ProBoolean
+    for Max 2023; existing ProBoolean bases retain their route. Explicit modifier
+    or proboolean selects a route. ProBoolean supports apply only, with mesh
+    union/subtract/intersect/merge, inline cutters and repeats. Live references,
+    imprint/cookie and operand-stack actions require the modifier route.
+    It retains an editable compound base, requires no
+    modifiers or instances on the base, and rejects modifier-only options/actions.
     """
     action = action.strip().lower()
     if not name:
         return _err("name (base object) is required")
     safe = safe_string(name)
+    backend = backend.strip().lower()
+    if backend not in {"auto", "modifier", "proboolean"}:
+        return _err("backend must be auto, modifier or proboolean")
+    if action not in {"apply", "list", "set_operand", "remove_operand", "extract_operand"}:
+        return _err(f"unknown action: {action}")
+    if action in {"set_operand", "remove_operand", "extract_operand"} and operand_index < 1:
+        return _err("operand_index (1-based, as returned by action=list) is required")
+    if action == "set_operand" and not any((operation.strip(), operation_option.strip(), rename, disable is not None)):
+        return _err("set_operand needs operation, operation_option, rename, or disable")
 
     if action == "apply":
         ops = [str(o) for o in (operands or []) if str(o).strip()]
@@ -295,6 +440,17 @@ def boolean_operation(
 
         names_arr = "#(" + ", ".join(f'"{safe_string(o)}"' for o in ops) + ")"
         enums_arr = "#(" + ", ".join(per_op) + ")"
+        route = _boolean_backend(name, backend)
+        if route == "proboolean":
+            if live or opt != "#none":
+                return _err("ProBoolean fallback does not support live, imprint or cookie options")
+            if meth == 1 or voxel_size or new_modifier or modifier_name:
+                return _err("ProBoolean does not support OpenVDB, voxel_size or modifier options")
+            if len(set(o.lower() for o in ops)) != len(ops):
+                return _err("operand names must be unique within one call")
+            return _apply_proboolean(safe, ops, per_op, cut_instances, cutter_block, use_operand_material)
+        if route != "modifier":
+            return _err(f"could not resolve Boolean backend: {route}")
         props = [f"bm.useLiveReference = {str(live).lower()}"]
         props.append(f"bm.useOperandMaterial = {str(use_operand_material).lower()}")
         if meth is not None:
@@ -380,6 +536,10 @@ def boolean_operation(
                 "nodes deleted; they keep their names in the operand list (see action=list)"
             )
         return result
+
+    route = _boolean_backend(name, backend)
+    if route != "modifier":
+        return _err("ProBoolean supports apply only; operand stack editing requires BooleanMod (Max 2024+)")
 
     if action == "list":
         script = f"""(

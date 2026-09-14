@@ -3440,6 +3440,9 @@
           },
           "disable": {
             "type": "boolean"
+          },
+          "backend": {
+            "type": "string"
           }
         }
       },
