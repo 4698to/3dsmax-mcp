@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "tool_count": 168,
+  "tool_count": 172,
   "starter_tools": [
     "query_scene",
     "get_session_context",
@@ -107,8 +107,16 @@
     {
       "name": "Materials",
       "hint": "Assign, textures, palette laydown, smart import",
-      "tool_count": 19,
+      "tool_count": 22,
       "categories": [
+        {
+          "name": "Cosmos",
+          "tools": [
+            "cosmos_download",
+            "cosmos_import",
+            "cosmos_search"
+          ]
+        },
         {
           "name": "Material Network",
           "tools": [
@@ -342,13 +350,14 @@
     },
     {
       "name": "Advanced",
-      "hint": "execute_maxscript and native diagnostics",
-      "tool_count": 3,
+      "hint": "MAXScript, Python and native diagnostics",
+      "tool_count": 4,
       "categories": [
         {
           "name": "Advanced",
           "tools": [
-            "execute_maxscript"
+            "execute_maxscript",
+            "execute_python"
           ]
         },
         {
@@ -507,6 +516,30 @@
       },
       "risk": "advanced",
       "routing": "maxscript",
+      "starter": false
+    },
+    {
+      "name": "execute_python",
+      "description": "Execute Python in 3ds Max; return stdout, stderr and a JSON-compatible value.",
+      "category": "Advanced",
+      "group": "Advanced",
+      "module": "execute",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "example": {
+        "code": "result = 42"
+      },
+      "risk": "advanced",
+      "routing": "python",
       "starter": false
     },
     {
@@ -1522,6 +1555,121 @@
         "plugin_name": "tyFlow"
       },
       "risk": "read",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "cosmos_download",
+      "description": "Download a Cosmos model, material or HDRI without importing it. Existing downloads are reused. Waits up to 0..60 seconds and returns ready, queued or downloading; call again to continue waiting. Requires Cosmos sign-in. The asset ID comes from cosmos_search.",
+      "category": "Cosmos",
+      "group": "Materials",
+      "module": "cosmos",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "wait_seconds": {
+            "type": "integer"
+          },
+          "renderer": {
+            "enum": [
+              "current",
+              "corona",
+              "vray"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_id"
+        ]
+      },
+      "example": {
+        "asset_id": ""
+      },
+      "risk": "advanced",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "cosmos_import",
+      "description": "Download if needed and import one Cosmos asset into the selected Max instance. Returns imported nodes, materials or maps and their file checks. Materials/maps use the renderer's normal importer; selection is preserved. A pending download makes no scene edit. Repeating a completed model import create",
+      "category": "Cosmos",
+      "group": "Materials",
+      "module": "cosmos",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "asset_id": {
+            "type": "string"
+          },
+          "wait_seconds": {
+            "type": "integer"
+          },
+          "renderer": {
+            "enum": [
+              "current",
+              "corona",
+              "vray"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "asset_id"
+        ]
+      },
+      "example": {
+        "asset_id": ""
+      },
+      "risk": "advanced",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "cosmos_search",
+      "description": "Find compatible Cosmos assets for the selected Max instance. Returns asset IDs, kinds, thumbnails, sizes and download states. Filter models, materials or HDRIs with kind. Renderer defaults to the current scene renderer. Use cosmos_download to cache an asset or cosmos_import to download and import it",
+      "category": "Cosmos",
+      "group": "Materials",
+      "module": "cosmos",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "all",
+              "model",
+              "material",
+              "hdri"
+            ],
+            "type": "string"
+          },
+          "downloaded": {
+            "type": "boolean"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "renderer": {
+            "enum": [
+              "current",
+              "corona",
+              "vray"
+            ],
+            "type": "string"
+          }
+        }
+      },
+      "example": {},
+      "risk": "advanced",
       "routing": "python",
       "starter": false
     },
@@ -6471,7 +6619,7 @@
     },
     {
       "name": "capture_screen",
-      "description": "Capture visible desktop pixels, optionally cropped to the V-Ray frame buffer.",
+      "description": "Capture visible desktop pixels, optionally cropped to a V-Ray or Corona frame buffer.",
       "category": "Viewport",
       "group": "Viewport & Render",
       "module": "viewport",

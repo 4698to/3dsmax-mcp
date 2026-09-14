@@ -79,10 +79,11 @@ def agent_viewport(
     action: open | status | release | minimize | restore | frame | orbit | pan |
     zoom | ray | pick | project | render | capture | stop_capture.
     open reserves an unused floating panel once.
-    render requires mode=shaded|activeshade|vray_ipr|vray_vfb. ActiveShade uses the assigned
+    render requires mode=shaded|activeshade|vray_ipr|vray_vfb|corona_vfb. ActiveShade uses the assigned
     ActiveShade renderer; renderer_source=production uses the production renderer
     if it supports ActiveShade. vray_ipr uses the current V-Ray CPU/GPU renderer.
-    vray_vfb opens VFB IPR locked to the agent view. V-Ray previews temporarily
+    vray_vfb and corona_vfb open their renderer's VFB IPR locked to the agent view.
+    Corona requires the current production renderer and preserves its denoising settings. V-Ray previews temporarily
     enable progressive IPR and a denoiser, restoring settings on stop. Other renderers
     expose different denoisers; ActiveShade does not promise automatic denoising.
     Existing renders in other views or the VFB are refused. shaded stops the owned preview.
@@ -118,8 +119,8 @@ def agent_viewport(
     if action not in {"open","status","release","minimize","restore","frame","orbit","pan","zoom","ray","pick","project","render","capture","stop_capture"}:
         raise ValueError("Unknown agent viewport action")
     if action == "render":
-        if mode not in {"shaded", "activeshade", "vray_ipr", "vray_vfb"}:
-            raise ValueError("render requires mode=shaded, activeshade, vray_ipr, or vray_vfb")
+        if mode not in {"shaded", "activeshade", "vray_ipr", "vray_vfb", "corona_vfb"}:
+            raise ValueError("render requires mode=shaded, activeshade, vray_ipr, vray_vfb, or corona_vfb")
     elif mode:
         raise ValueError("mode is only valid for action=render")
     if renderer_source not in {"activeshade", "production"}:
@@ -167,8 +168,8 @@ def agent_viewport(
         if render.get("session_state") == "starting":
             return {"status":"starting", "capture":None, "stopped":False,
                     "hint":"Read status after VFB startup, then capture; old VFB pixels are not this preview."}
-        if render.get("capture_target") == "vray_vfb":
-            capture = capture_screen(enabled=True, target="vray_vfb", crop=crop)
+        if render.get("capture_target") in {"vray_vfb", "corona_vfb"}:
+            capture = capture_screen(enabled=True, target=render["capture_target"], crop=crop)
         else:
             if crop is not None:
                 raise ValueError("crop requires a VFB preview")
@@ -475,12 +476,12 @@ def capture_screen(
     target: str = "screen",
     crop: IntList | None = None,
 ) -> Any:
-    """Capture visible desktop pixels, optionally cropped to the V-Ray frame buffer.
+    """Capture visible desktop pixels, optionally cropped to a V-Ray or Corona frame buffer.
 
     Read the returned `file` path to view the capture. return_image is
     deprecated and ignored — the image is never inlined.
-    target=screen captures the primary monitor; vray_vfb finds the visible V-Ray
-    Frame Buffer belonging to this Max process, on any monitor, and captures its
+    target=screen captures the primary monitor; vray_vfb or corona_vfb finds that
+    renderer's visible Frame Buffer belonging to this Max process and captures its
     client area. crop=[x,y,width,height] is relative to that area in physical
     pixels BEFORE resizing, for example to exclude VFB toolbars. The window must
     be fully on screen. Overlapping windows appear in the image; this does not
@@ -489,8 +490,8 @@ def capture_screen(
     """
     if not enabled:
         raise ValueError("capture_screen is disabled by default; set enabled=True to allow fullscreen capture")
-    if target not in {"screen", "vray_vfb"}:
-        raise ValueError("target must be screen or vray_vfb")
+    if target not in {"screen", "vray_vfb", "corona_vfb"}:
+        raise ValueError("target must be screen, vray_vfb or corona_vfb")
     if crop is not None:
         _validate_screen_crop(crop)
 

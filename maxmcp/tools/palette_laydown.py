@@ -22,11 +22,11 @@ def palette_laydown(
 ) -> str:
     """Lay down folder textures into Compact Material Editor palette slots.
 
-    slot_content: material = one OpenPBR preview per bitmap; bitmap = raw
+    slot_content: material = one preview per bitmap (OpenPBR by default); bitmap = raw
     Bitmaptexture slots; pbr_material/full_pbr = grouped PBR material sets.
-    material_class only applies to grouped PBR (slot_content=pbr_material). Pass any
+    material_class selects the renderer for previews and grouped PBR. Pass any
     value from tripback ``supported_material_classes`` — OpenPBR, Physical, Arnold,
-    Redshift, V-Ray, MaterialX, Octane variants, etc.
+    Redshift, V-Ray, CoronaPhysicalMtl, MaterialX, Octane variants, etc.
     include_displacement controls whether height/displacement maps are wired in
     grouped PBR mode.
     name_pattern: optional include glob(s) on texture-set / filename stems,

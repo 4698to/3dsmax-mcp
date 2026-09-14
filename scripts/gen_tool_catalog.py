@@ -21,6 +21,7 @@ from scripts.gen_tool_registry import (  # noqa: E402
 from scripts.gen_tool_smoke import CUSTOM, MUTATE_TOOLS, SKIP_DEFAULT  # noqa: E402
 
 MODULE_CATEGORY = {
+    "cosmos": "Cosmos",
     "curve_model": "Modeling",
     "curve_edit": "Modeling",
     "bridge": "Connection",
@@ -69,6 +70,7 @@ MODULE_CATEGORY = {
 
 # Top-level buckets for the playground sidebar (order matters).
 CATEGORY_TO_GROUP: dict[str, str] = {
+    "Cosmos": "Materials",
     "Modeling": "Objects",
     "Connection": "Setup",
     "Session": "Setup",
@@ -121,7 +123,7 @@ GROUP_HINTS: dict[str, str] = {
     "Viewport & Render": "Captures and rendering",
     "Files": "External .max inspection and merge",
     "Specialty": "MCG, Data Channel, tyFlow, RailClone, etc.",
-    "Advanced": "execute_maxscript and native diagnostics",
+    "Advanced": "MAXScript, Python and native diagnostics",
 }
 
 STARTER_TOOLS = [

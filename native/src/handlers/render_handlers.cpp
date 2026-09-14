@@ -301,7 +301,7 @@ std::string NativeHandlers::RenderCancelCapture(const std::string& params, MCPBr
     const auto p=json::parse(params);
     if(p.value("job_id","").empty()) throw std::runtime_error("cancel_capture requires the armed render job_id");
     const auto target=p.value("target","vray_vfb");
-    if(target!="vray_vfb" && target!="screen") throw std::runtime_error("Unknown capture target");
+    if(target!="vray_vfb" && target!="corona_vfb" && target!="screen") throw std::runtime_error("Unknown capture target");
     if(p.contains("crop")) CaptureRegion::Crop({0,0,131072,131072},p.at("crop"));
     json out={{"capture",nullptr},{"captured_before_cancel",true},{"stopped",nullptr},{"converged",nullptr}};
     try { out["capture"]=json::parse(CaptureScreen(p.dump(),gup)); }

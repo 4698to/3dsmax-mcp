@@ -546,7 +546,7 @@ def smart_import(
     material_class:
         Renderer for auto-built PBR materials. Pass any value from tripback
         ``supported_material_classes`` / ``hint.renderers`` — OpenPBR (default),
-        Physical, Arnold, Redshift, V-Ray, MaterialX, Octane variants, etc.
+        Physical, Arnold, Redshift, V-Ray, CoronaPhysicalMtl, MaterialX, Octane variants, etc.
         Empty defaults to OpenPBR. Ignored for .max and .usd* assets.
     include_displacement:
         Wire height/displacement maps when present (default true).

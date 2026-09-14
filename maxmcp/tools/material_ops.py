@@ -60,6 +60,9 @@ def _ms_path(p: Path) -> str:
 def _material_slot_hints(material_class: str) -> dict[str, str]:
     """Return compact map-class hints by material class."""
     cls = material_class.lower()
+    if cls.lstrip("_") in {"corona", "coronaphysicalmtl", "coronamtl", "coronalegacymtl"}:
+        return {"preferredBitmapClass": "Bitmaptexture", "normalHelperClass": "CoronaNormal",
+                "bumpHelperClass": "", "channelPickerClass": "ColorCorrection"}
     if cls == "ai_standard_surface":
         return {
             "preferredBitmapClass": "ai_image",
@@ -904,7 +907,7 @@ def create_material_from_textures(
 
     Pass ``material_class`` to pick the renderer — any value from tripback
     ``supported_material_classes`` / ``hint.renderers`` (OpenPBR default, Physical,
-    Arnold, Redshift, V-Ray, MaterialX, Octane, etc.).
+    Arnold, Redshift, V-Ray, CoronaPhysicalMtl, MaterialX, Octane, etc.).
     """
     # -- Step 1: Scan folder (Python-side) --
     files = _scan_texture_folder(texture_folder)
@@ -1204,12 +1207,13 @@ def _palette_laydown_impl(
     """Load image files from a folder into Compact Material Editor sample slots.
 
     slot_content="material" creates OpenPBR-first preview materials, wires each
-    bitmap into base color, and sets specular color to black. slot_content="bitmap"
+    bitmap into base color, and sets specular color to black. An explicit
+    material_class instead creates previews with that renderer. slot_content="bitmap"
     places raw Bitmaptexture maps directly into the palette slots. slot_content
     values like "pbr_material" or "full_pbr" group texture sets by filename and
     create one fully wired PBR material per slot. For grouped mode, material_class
     may be OpenPBRMaterial, PhysicalMaterial, ai_standard_surface,
-    RS_Standard_Material, VRayMtl, MaterialX, Std_Surface_Mtl (octane_standard),
+    RS_Standard_Material, VRayMtl, CoronaPhysicalMtl, MaterialX, Std_Surface_Mtl (octane_standard),
     Open_PBR_Surf__Mtl (octane_pbr), or Universal_material (octane_universal);
     OpenPBR is the default. Octane variants build with Image_MTX, Channel_picker
     (for packed ORM), Multiply_MTX (diffuse x AO), and Invert_MTX (gloss to
@@ -1256,7 +1260,7 @@ def _palette_laydown_impl(
         return str(exc)
 
     renderer = _renderer_from_material_class(material_class)
-    if slot_content == "pbr_material" and renderer is None:
+    if slot_content != "bitmap" and renderer is None:
         return unsupported_material_class_result(material_class, tool="palette_laydown")
 
     filter_extra: dict[str, object] = {
@@ -1395,15 +1399,35 @@ def _palette_laydown_impl(
     if overflow_mode_norm == "truncate" and len(files) > max_slots:
         filter_extra["truncated"] = len(files) - max_slots
 
+    if slot_content == "material" and material_class.strip():
+        def preview_groups(paths):
+            return [{"name": p.stem, "channels": {"diffuse": p}, "aliases": {}} for p in paths]
+
+        body = _build_material_editor_pbr_palette_maxscript(
+            preview_groups(selected), start_slot, open_editor, material_prefix,
+            renderer, include_displacement=False, unmatched_count=0, duplicate_count=0,
+            library_groups=preview_groups(library_files),
+        )
+    else:
+        body = _build_material_editor_palette_maxscript(
+            selected, start_slot, open_editor, material_prefix, slot_content,
+            library_files=library_files,
+        )
+
     maxscript = f"""(
     try (
-        {_build_material_editor_palette_maxscript(selected, start_slot, open_editor, material_prefix, slot_content, library_files=library_files)}
+        {body}
     ) catch (
         "Error: " + (getCurrentException())
     )
 )"""
     response = client.send_command(maxscript)
     raw = response.get("result", "")
+    if slot_content == "material" and material_class.strip():
+        return wrap_material_tool_result(
+            str(raw), material_class=material_class, renderer=renderer,
+            tool="palette_laydown", slot_content=slot_content, **filter_extra,
+        )
     return {
         "message": str(raw),
         "slot_content": slot_content,
@@ -1445,7 +1469,7 @@ def create_shell_material(
     ``export_material`` (material names already in the scene).
 
     **Build from textures** — pass ``texture_folder`` and ``render_material_class``
-    (any PBR class from tripback: OpenPBR, Physical, Arnold, Octane, etc.).
+    (any PBR class from tripback: OpenPBR, Physical, CoronaPhysicalMtl, Arnold, Octane, etc.).
     Optionally set ``export_material_class`` for a different export/viewport material;
     defaults to the same class as the render side. Names default to
     ``{shell_name}_render`` / ``{shell_name}_export`` unless overridden via

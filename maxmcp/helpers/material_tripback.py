@@ -39,6 +39,11 @@ PBR_RENDERER_REGISTRY: list[dict[str, Any]] = [
         "max_class": "VRayMtl",
         "ask_as": ["VRayMtl", "vray", "v-ray"],
     },
+    {
+        "renderer": "corona", "label": RENDERER_LABELS["corona"],
+        "max_class": "CoronaPhysicalMtl",
+        "ask_as": ["CoronaPhysicalMtl", "_CoronaPhysicalMtl", "corona", "corona_physical"],
+    },
     {
         "renderer": "materialx",
         "label": RENDERER_LABELS["materialx"],
@@ -66,7 +71,7 @@ PBR_RENDERER_REGISTRY: list[dict[str, Any]] = [
 ]
 
 _PBR_TOOLS = (
-    "smart_import, palette_laydown(slot_content=pbr_material), create_material_from_textures"
+    "smart_import, palette_laydown(slot_content=material|pbr_material), create_material_from_textures"
 )
 
 
@@ -89,7 +94,7 @@ def material_class_hint(
         "renderers": renderers,
         "supported_material_classes": primary_ask_as,
         "summary": (
-            "OpenPBR (default), Physical, Arnold, Redshift, V-Ray, MaterialX, "
+            "OpenPBR (default), Physical, Arnold, Redshift, V-Ray, Corona, MaterialX, "
             "Octane (standard / pbr / universal)"
         ),
     }
