@@ -1117,6 +1117,7 @@ def _build_material_editor_pbr_palette_maxscript(
         "local libraryLoaded = #()",
         "local classes = #()",
         "local errors = #()",
+        "local skipped = #()",
         f"local slotIndex = {start_slot}",
     ])
     lines.extend(_pbr_renderer_setup_lines(
@@ -1147,6 +1148,7 @@ def _build_material_editor_pbr_palette_maxscript(
             f"    try (medit.PutMtlToMtlEditor {mat_var} slotIndex) catch (meditMaterials[slotIndex] = {mat_var})",
             "    try (medit.SetActiveMtlSlot slotIndex true) catch (activeMeditSlot = slotIndex)",
             f'    append loaded ((slotIndex as string) + ": " + {mat_var}.name + " [" + channelList + "]")',
+            f'    if skippedList != "" do append skipped ({mat_var}.name + ": " + skippedList)',
             f"    appendIfUnique classes ((classOf {mat_var}) as string)",
             "    slotIndex += 1",
             f') catch (append errors ("{mat_name}: " + (getCurrentException())))',
@@ -1168,12 +1170,14 @@ def _build_material_editor_pbr_palette_maxscript(
         lines.extend([
             f"    try (append currentMaterialLibrary {mat_var}) catch ()",
             f'    append libraryLoaded ("lib: " + {mat_var}.name + " [" + channelList + "]")',
+            f'    if skippedList != "" do append skipped ({mat_var}.name + ": " + skippedList)',
             f"    appendIfUnique classes ((classOf {mat_var}) as string)",
             f') catch (append errors ("{mat_name}: " + (getCurrentException())))',
         ])
 
     lines.extend([
         f'local msg = "Loaded " + (loaded.count as string) + " grouped PBR material(s) into Material Editor slots using {renderer_label}"',
+        'if skipped.count > 0 do msg += " | Skipped: " + (skipped as string)',
         'if loaded.count > 0 do msg += " [" + loaded[1] + " .. " + loaded[loaded.count] + "]"',
         'if libraryLoaded.count > 0 do msg += " | Library: " + (libraryLoaded.count as string) + " material(s)"',
         'if libraryLoaded.count > 0 do msg += " [" + libraryLoaded[1] + " .. " + libraryLoaded[libraryLoaded.count] + "]"',

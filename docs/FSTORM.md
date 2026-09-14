@@ -109,6 +109,10 @@ Area dimensions and positions accept `distance_unit` (`scene`, `mm`, `cm`, `m`,
 `size_y` are half-extents; the provider translates full width/height accordingly.
 Disc and sphere `size_x` is radius. Shape bindings and bounds were checked in Max.
 Power remains FStorm's native value; resizing may change total emitted energy.
+Inspection includes `directional` (spot mode) and `directional_angle` (degrees)
+for area emitters. Both participate in the light token, so changing either
+requires fresh inspection before a guarded edit. Spot-mode/angle editing remains
+available through the generic plugin tools.
 
 For example, pass this to `create_lights` to add a warm rectangular light:
 

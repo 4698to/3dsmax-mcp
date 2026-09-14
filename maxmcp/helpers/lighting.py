@@ -621,6 +621,7 @@ def inspect_one(owner_ref: dict, family: str | None = None) -> dict:
             shape = next((k for k,v in fs.SHAPES.items() if v == value("shape")), None)
             mode = value("color_type")
             state.update(shape=shape, kind="area" if shape else None,
+                         directional=value("directional"), directional_angle=value("directional_angle"),
                          color={"kelvin": value("temperature")} if mode == 1 else {"rgb": value("color"), "space": "rendering"} if mode == 0 else {"texmap": value("texture")},
                          size={"width": 2*value("size_x"), "height": 2*value("size_y")} if shape == "rectangle" else {"radius": value("size_x")} if shape else None,
                          ies={"path": value("ies"), "enabled": value("ies_enabled")})

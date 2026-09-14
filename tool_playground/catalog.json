@@ -6369,7 +6369,7 @@
     },
     {
       "name": "create_lights",
-      "description": "Create 1..32 semantic lights in one native transaction with typed readback. Finite spherical bulbs are area/sphere; HDRI skies are environment. Distances use scene, mm, cm, m, in or ft. Orientation uses a world aim_at or direction. Discover supported kinds and physical/native output units first. Nat",
+      "description": "Create 1..32 semantic lights in one native transaction with typed readback. Finite spherical bulbs are area/sphere; HDRI skies are environment. Distances use scene, mm, cm, m, in or ft. Orientation uses a world aim_at or direction. FStorm: area rectangle/disk/sphere, renderer power, RGB or Kelvin. D",
       "category": "Lighting",
       "group": "Viewport & Render",
       "module": "lighting",
@@ -6403,7 +6403,7 @@
     },
     {
       "name": "edit_lights",
-      "description": "Edit inspected lights atomically. Each edit contains light_ref, expected_light (the light_token from inspection), changes and optional sharing='all_instances'. Changes accept color, output, enabled, cast_shadows and a complete size for the existing shape. Dimensions use distance_unit. A changed ligh",
+      "description": "Edit inspected lights atomically. Each edit contains light_ref, expected_light (the light_token from inspection), changes and optional sharing='all_instances'. Changes accept color, output, enabled, cast_shadows and a complete size for the existing shape. FStorm also accepts nested fstorm controls: ",
       "category": "Lighting",
       "group": "Viewport & Render",
       "module": "lighting",

@@ -37,7 +37,8 @@ class FStormControls(BaseModel):
 
 COMMON_FIELDS = ["enabled", "power", "visible", "affect_diffuse", "affect_glossy", "targeted"]
 AREA_FIELDS = COMMON_FIELDS + ["shape", "size_x", "size_y", "color_type", "color", "temperature",
-                               "texture", "cast_shadows", "gi_visible", "double_sided", "ies", "ies_enabled"]
+                               "texture", "cast_shadows", "gi_visible", "double_sided", "ies", "ies_enabled",
+                               "directional", "directional_angle"]
 SUN_FIELDS = COMMON_FIELDS + ["size", "model", "sun_color", "hour", "month", "latitude", "north_direction"]
 
 
