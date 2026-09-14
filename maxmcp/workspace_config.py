@@ -146,3 +146,74 @@ def next_shared_capture_path(prefix: str = "dialog_monitor") -> Optional[str]:
     ensure_workspace_dir(shared)
     name = f"{prefix}_{uuid4().hex}.png"
     return str((shared / name).resolve()).replace("\\", "/")
+
+
+# ---------------------------------------------------------------------------
+# External OCR service (dialog_monitor / GoSkin)
+# ---------------------------------------------------------------------------
+
+ENV_OCR_BASE = "MAXMCP_OCR_BASE"
+DEFAULT_OCR_BASE_FALLBACK = "http://192.168.139.130:8000"
+
+
+def _read_ocr_base_from_ini(path: Path) -> Optional[str]:
+    """Return OCR base URL from [ocr] base= / url= / endpoint=."""
+    parser = configparser.ConfigParser()
+    try:
+        if not parser.read(path, encoding="utf-8"):
+            return None
+    except (OSError, configparser.Error, UnicodeError) as exc:
+        logger.warning("Could not read OCR config from %s: %s", path, exc)
+        return None
+    if not parser.has_section("ocr"):
+        return None
+    for key in ("base", "url", "endpoint", "ocr_base"):
+        raw = parser.get("ocr", key, fallback="").strip()
+        if raw:
+            return raw.rstrip("/")
+    return None
+
+
+def discover_ocr_base() -> tuple[str, str]:
+    """Resolve OCR HTTP base URL and its source label.
+
+    Priority:
+      1. MAXMCP_OCR_BASE env (non-empty)
+      2. First max_instances.ini with [ocr] base=
+      3. Built-in default
+    """
+    env = (os.environ.get(ENV_OCR_BASE) or "").strip()
+    if env:
+        return env.rstrip("/"), ENV_OCR_BASE
+
+    for path in _instances_config_candidates():
+        if not path.is_file():
+            continue
+        raw = _read_ocr_base_from_ini(path)
+        if raw:
+            logger.info("OCR base from %s: %s", path, raw)
+            return raw, str(path)
+
+    return DEFAULT_OCR_BASE_FALLBACK, "builtin_default"
+
+
+@lru_cache(maxsize=1)
+def get_ocr_base() -> str:
+    """Cached OCR service base URL (no trailing slash)."""
+    base, _source = discover_ocr_base()
+    return base
+
+
+def clear_ocr_cache() -> None:
+    get_ocr_base.cache_clear()
+
+
+def ocr_info() -> dict:
+    """Structured OCR endpoint status for tools / diagnostics."""
+    base, source = discover_ocr_base()
+    return {
+        "ocr_base": base,
+        "source": source,
+        "health_url": f"{base}/v1/ocr/health",
+        "recognize_url": f"{base}/v1/ocr",
+    }

@@ -38,7 +38,8 @@ path = \\fileserver\share\3dsmax-mcp\workspace
 | `goskin_confirm_start` | 用户确认后才点「开始蒙皮」并等待「完成」（`user_confirmed=true`） |
 | `goskin_run_auto` | ensure + run；默认同样在开始前暂停 |
 
-OCR 基址：`MAXMCP_OCR_BASE`，默认 `http://192.168.139.130:8000`。  
+OCR 基址优先级：`MAXMCP_OCR_BASE` > `max_instances.ini` `[ocr] base=` > 默认 `http://192.168.139.130:8000`。  
+接口：`GET {base}/v1/ocr/health`、`POST {base}/v1/ocr`。  
 Progressive 工具集：`dialog_ui`。
 
 ## Auto GoSkin 流程

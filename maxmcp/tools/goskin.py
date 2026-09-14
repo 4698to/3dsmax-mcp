@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from typing import Any, Optional
 
 from ..coerce import StrList
 from ..server import mcp, client
+from ..workspace_config import get_ocr_base
 
 _REPO_ROOT = __import__("pathlib").Path(__file__).resolve().parents[2]
 if (_REPO_ROOT / "dialog_monitor").is_dir() and str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from dialog_monitor.click_button import DEFAULT_OCR_BASE  # noqa: E402
 from dialog_monitor.goskin_flow import (  # noqa: E402
     cleanup_goskin_lists as _cleanup_goskin_lists,
     confirm_goskin_start as _confirm_goskin_start,
@@ -27,10 +26,7 @@ def _ocr_base(override: str = "") -> str:
     value = (override or "").strip()
     if value:
         return value.rstrip("/")
-    env = (os.environ.get("MAXMCP_OCR_BASE") or "").strip()
-    if env:
-        return env.rstrip("/")
-    return DEFAULT_OCR_BASE
+    return get_ocr_base()
 
 
 def _strip_ocr_lines(obj: Any) -> Any:

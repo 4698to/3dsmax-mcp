@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,7 +12,8 @@ if (_REPO_ROOT / "dialog_monitor").is_dir() and str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from ..server import mcp, client
-from dialog_monitor.ocr_client import DEFAULT_OCR_BASE, OcrError, health as ocr_health
+from ..workspace_config import get_ocr_base, ocr_info, workspace_info
+from dialog_monitor.ocr_client import OcrError, health as ocr_health
 from dialog_monitor.click_button import (
     click_dialog_button as _click_dialog_button,
     click_menu_path as _click_menu_path,
@@ -25,10 +25,7 @@ def _ocr_base(override: str = "") -> str:
     value = (override or "").strip()
     if value:
         return value.rstrip("/")
-    env = (os.environ.get("MAXMCP_OCR_BASE") or "").strip()
-    if env:
-        return env.rstrip("/")
-    return DEFAULT_OCR_BASE
+    return get_ocr_base()
 
 
 def _trim_ocr_payload(result: dict[str, Any], include_ocr_lines: bool) -> dict[str, Any]:
@@ -58,8 +55,6 @@ def _trim_ocr_payload(result: dict[str, Any], include_ocr_lines: bool) -> dict[s
 
 def _workspace_status() -> dict[str, Any]:
     try:
-        from ..workspace_config import workspace_info
-
         return workspace_info()
     except Exception as exc:
         return {"shared_configured": False, "error": str(exc)}
@@ -69,17 +64,37 @@ def _workspace_status() -> dict[str, Any]:
 def check_dialog_ocr_health(ocr_base: str = "") -> dict[str, Any]:
     """Check the external dialog OCR service (/v1/ocr/health).
 
-    Default base is MAXMCP_OCR_BASE or http://192.168.139.130:8000.
-    Also reports shared workspace status from max_instances.ini [workspace]
-    (required for remote Max screenshot → OCR on another host).
+    Base URL: tool arg > env MAXMCP_OCR_BASE > max_instances.ini [ocr] base=
+    > builtin default. Also reports [workspace] status and endpoint URLs.
     """
     base = _ocr_base(ocr_base)
     ws = _workspace_status()
+    if (ocr_base or "").strip():
+        endpoints = {
+            "ocr_base": base,
+            "source": "tool_argument",
+            "health_url": f"{base}/v1/ocr/health",
+            "recognize_url": f"{base}/v1/ocr",
+        }
+    else:
+        endpoints = ocr_info()
     try:
         payload = ocr_health(base)
-        return {"ok": True, "ocr_base": base, "health": payload, "workspace": ws}
+        return {
+            "ok": True,
+            "ocr_base": base,
+            "endpoints": endpoints,
+            "health": payload,
+            "workspace": ws,
+        }
     except OcrError as exc:
-        return {"ok": False, "ocr_base": base, "error": str(exc), "workspace": ws}
+        return {
+            "ok": False,
+            "ocr_base": base,
+            "endpoints": endpoints,
+            "error": str(exc),
+            "workspace": ws,
+        }
 
 
 @mcp.tool()

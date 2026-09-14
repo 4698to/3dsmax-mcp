@@ -1,6 +1,9 @@
 ---
 name: 3dsmax-mcp
-description: Tool choices, workflows, and MAXScript pitfalls for controlling 3ds Max via MCP.
+description: >-
+  Tool choices, workflows, and MAXScript pitfalls for controlling 3ds Max via MCP.
+  Includes GoSkin / 自动蒙皮 OCR simulated-click automation. Use when driving Max
+  through MCP tools, progressive toolsets, dialog OCR clicks, or Auto GoSkin.
 ---
 
 # 3ds Max MCP — Agent Guide
@@ -115,6 +118,13 @@ Debugging:
 - Textures: `create_texture_map`, `set_texture_map_properties`
 - Dual pipeline: `create_shell_material`, `replace_material`, `batch_replace_materials`
 - OSL: `write_osl_shader`
+
+### Dialog OCR / Auto GoSkin
+- Qt plugin dialogs without child HWNDs (e.g. **自动蒙皮 / GoSkinning**): screenshot → external OCR → `SetCursorPos` + `mouse_event` clicks.
+- Prefer `goskin_ensure_ready` → `goskin_run_skin` (default pauses before 「开始蒙皮」) → show `user_prompt` → only then `goskin_confirm_start(user_confirmed=true)`.
+- **Must** click list slot 「(选中后在编辑区添加)」 before 「选定」, or a warning covers the UI.
+- Remote desktop must stay **unlocked** (lock screen → empty-success clicks). Config: `max_instances.ini` `[ocr] base=` and optional `[workspace]`.
+- Progressive toolset: `dialog_ui`. Read [goskin-ocr-click.md](goskin-ocr-click.md) completely before automating GoSkin.
 
 ### Material notes
 - `create_material_from_textures` and `smart_import` default to **OpenPBR**. Pass `material_class` for Physical, Arnold, Redshift, V-Ray, MaterialX, Octane, etc. (see tool tripback `hint.renderers`).
@@ -319,6 +329,10 @@ Read the relevant reference file before writing unfamiliar MAXScript:
 | `maxscript-splines-shapes.md` | Splines and shapes |
 | `maxscript-scripted-plugins.md` | Scripted geometry, modifiers, utilities |
 | `maxscript-ui-rollouts.md` | Rollout UIs and dialogs |
+| `goskin-ocr-click.md` | Auto GoSkin OCR mouse-click case study (order, confirm gate, lock-screen limits) |
+| `curve-construction.md` | Curve model / inspect / edit recipes |
+| `tyflow-graphs.md` | tyFlow event graphs and ledger |
+| `procedural-graphs.md` | Data Channel and Max Creation Graph |
 
 ### Unwrap UVW
 - Open the editor: `$Box001.modifiers[#Unwrap_UVW].edit()` — not the `OpenUnwrapUI` macro alone

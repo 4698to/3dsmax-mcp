@@ -17,6 +17,7 @@
 - **插件自省 v2** — 精确身份、有界查询、声明式枚举与状态令牌，配合原子类型化 `plugin_patch` 修改插件（1.6.7 新增）
 - **多人共享与多实例** — 一台共享服务器对接多台 3ds Max，多用户按"获取 → 使用 → 释放"独占实例，锁 TTL 与心跳自动清理失联（1.6.7 新增）
 - **深度插件支持** — tyFlow、Data Channel、MCG、OSL、Forest Pack、RailClone、Octane
+- **对话框 OCR 点击** — 对无 HWND 的 Qt 插件窗（如自动蒙皮 GoSkin）截图 → 外部 OCR → 按文字模拟鼠标点击
 - **内置智能体技能包** — 附带 MAXScript 参考文档，便于你编写自己的工具
 
 ## 环境要求
@@ -159,17 +160,22 @@ uv run python install.py
 ```ini
 [instances]
 max1 = 192.168.139.45:8765
+
+# 跨机截图 / OCR 点击时建议配置双方均可读写的共享目录
+[workspace]
+path = K:\共享\3dsmax-mcp\workspace
+
+# 外部 OCR 服务（对话框文字识别）
+[ocr]
+base = http://192.168.139.130:8000
 ```
 
 查找顺序：`MAXMCP_INSTANCES_FILE` → 当前目录 / 项目根 `max_instances.ini` → `%LOCALAPPDATA%\3dsmax-mcp\max_instances.ini`。
 
-也可继续用旧式环境变量：
+OCR 基址优先级：`MAXMCP_OCR_BASE` 环境变量 > `[ocr] base=` > 代码默认 `http://192.168.139.130:8000`。  
+接口约定：`GET {base}/v1/ocr/health`、`POST {base}/v1/ocr`。可用 `check_dialog_ocr_health` 探测。
 
-```bash
-set MAXMCP_INSTANCES=192.168.139.45:8765:max1
-```
 
-优先级：`MAXMCP_INSTANCES` 环境变量 > `max_instances.ini` > 本机注册表自动发现 > 回退 `127.0.0.1:8765`。
 
 ### 3. 其他人如何连接（客户端配置）
 
@@ -361,6 +367,63 @@ Base URL、API Key 和模型名：
 
 ---
 
+## 对话框 OCR 
+
+部分 Qt 插件对话框（如「自动蒙皮 / GoSkinning」）没有可用的子控件 HWND，无法用常规 MaxScript UI 访问。
+本仓库的 `dialog_monitor` 模块走：**找窗 → 截图 → 外部 OCR → 按文字坐标模拟鼠标点击**。
+
+更细的工具表与限制见 [dialog_monitor/README.md](dialog_monitor/README.md)。
+
+### 点击原理
+
+在 3ds Max 进程内通过 .NET 调用 `user32.dll`：
+
+1. `SetForegroundWindow` — 将目标对话框置前  
+2. `SetCursorPos` — 移动到屏幕物理坐标  
+3. `mouse_event(LEFTDOWN / LEFTUP)` — 模拟左键单击  
+
+坐标由 OCR 文字框映射到客户区屏幕坐标（`image_to_screen`）。这是**系统输入桌面注入**，不是给控件发 `WM_LBUTTON*`。
+
+| 远程桌面状态 | 截图 / OCR | 模拟点击 |
+|--------------|------------|----------|
+| 已解锁（关显示器也可） | 正常 | 正常 |
+| **锁屏 / 断开 RDP** | 常仍可读界面 | **空成功**（回报 ok，UI 不变） |
+
+因此 GoSkin 自动化要求远程主机保持**解锁的交互桌面**。
+
+### Auto GoSkin 固化顺序（勿打乱）
+
+1. 打开/定位对话框，切到「蒙皮 / 全局蒙皮」  
+2. 关掉上次误操作留下的警告窗（否则会挡住主界面）  
+3. 列表有残留时点「清空」  
+4. **先点**「(选中后在编辑区添加)」（或已有 `模型：N`）——不点就点「选定」会弹警告  
+5. 场景选中模型 →「选定」→ OCR 校验 `模型：N≥1`  
+6. 再聚焦列表行 → 场景选中骨骼 →「选定」→ 校验 `关节：N≥1`  
+7. **暂停**：返回模型/关节名称与数量摘要，**默认不点「开始蒙皮」**  
+8. 用户确认后调用 `goskin_confirm_start(user_confirmed=true)` 才点击并等待 OCR「完成」
+
+### 相关 MCP 工具
+
+| 工具 | 作用 |
+|------|------|
+| `goskin_ensure_ready` | 打开/定位 GoSkin，切到「蒙皮 / 全局蒙皮」 |
+| `goskin_cleanup_lists` | 清空模型/关节编辑区残留 |
+| `goskin_run_skin` | 准备列表后暂停，返回确认摘要（默认 `click_start=false`） |
+| `goskin_confirm_start` | 仅当 `user_confirmed=true` 时点击「开始蒙皮」 |
+| `goskin_run_auto` | ensure + run；默认同样在开始前暂停 |
+| `check_dialog_ocr_health` / `recognize_plugin_dialog` / `click_plugin_dialog_button` | 通用对话框 OCR 与点击 |
+
+OCR 服务基址配置（优先级从高到低）：
+
+1. 工具参数 `ocr_base`  
+2. 环境变量 `MAXMCP_OCR_BASE`  
+3. `max_instances.ini` 的 `[ocr] base=`  
+4. 代码默认 `http://192.168.139.130:8000`
+
+接口：`GET {base}/v1/ocr/health`、`POST {base}/v1/ocr`。跨机请同时配置 `[workspace]`。Progressive 工具集名：`dialog_ui`。
+
+---
+
 ## 工具配置（Tool Profile）
 
 安装程序默认选择 **full**，让现有 MCP 客户端直接看到全部工具。对于上下文有限的本地或较小模型，
@@ -373,7 +436,7 @@ $env:MCP_TOOL_PROFILE = "progressive"
 | 配置 | 包含范围 |
 |------|----------|
 | **progressive（节省上下文）** | 三个发现/调用元工具；按需加载完整操作工具与参数，适合本地或较小模型 |
-| **core** | 场景、物体、材质、修改器、控制器、视口、文件、插件、组织管理、学习 |
+| **core** | 场景、物体、材质、修改器、控制器、视口、文件、插件、组织管理、学习、**对话框 OCR / GoSkin** |
 | **full（安装默认）** | core 全部，外加 tyFlow、MCG、Forest Pack、RailClone、Data Channel、特效、状态集、参数关联、**渲染**、户型平面、Max 内置聊天 |
 
 progressive 模式下先列出并描述对应工具组，再通过 `call_tool` 调用所需工具。`tools/list` 始终保持三个条目；
@@ -409,6 +472,9 @@ core/full 仍可用于需要一次性公开全部参数的旧客户端。
 
 **能自己加工具吗**
 可以。安装脚本会生成一个智能体技能包，内含 MAXScript 参考资料，专门用来指导 AI 写新工具。
+
+**自动蒙皮 / 对话框点击为什么“点了没反应”**
+常见原因：① 远程主机**锁屏或断开 RDP**（TCP/截图可能仍正常，但 `mouse_event` 空成功）；② 未先点「(选中后在编辑区添加)」就点了「选定」，弹出警告窗挡住界面。请保持桌面解锁，并按上文 GoSkin 固化顺序操作。详见 [dialog_monitor/README.md](dialog_monitor/README.md)。
 
 ---
 

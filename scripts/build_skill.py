@@ -17,7 +17,11 @@ GLOBAL_AGENTS_DIR = Path.home() / ".agents" / "skills" / "3dsmax-mcp-dev"
 def collect_skill_files():
     """Collect the core skill and its bundled reference files."""
     files = [SKILL_SRC, PROCEDURAL_GRAPHS_REF]
-    for ref in ("tyflow-graphs.md", "curve-construction.md"):
+    for ref in (
+        "tyflow-graphs.md",
+        "curve-construction.md",
+        "goskin-ocr-click.md",
+    ):
         path = SKILL_DIR / ref
         if path.exists():
             files.append(path)
