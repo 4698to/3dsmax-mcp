@@ -114,6 +114,7 @@ set(SOURCES
 )
 
 add_library(mcp_bridge SHARED ${SOURCES})
+target_sources(mcp_bridge PRIVATE src/window_capture.cpp)
 
 add_dependencies(mcp_bridge gen_tool_registry gen_tool_smoke)
 
@@ -192,6 +193,7 @@ if(MCP_BUILD_AGENT_VIEWPORT_PROBE)
     target_link_directories(agent_viewport_probe PRIVATE "${MAXSDK_PATH}/lib/x64/Release")
     target_link_libraries(agent_viewport_probe PRIVATE core.lib maxutil.lib Maxscrpt.lib Geom.lib mesh.lib Paramblk2.lib ViewSystem.lib)
     target_compile_options(agent_viewport_probe PRIVATE /EHa)
+    target_sources(agent_viewport_probe PRIVATE src/window_capture.cpp)
 endif()
 
 set(MAX_PLUGINS_DIR "C:/Program Files/Autodesk/3ds Max ${MAX_VERSION}/plugins"

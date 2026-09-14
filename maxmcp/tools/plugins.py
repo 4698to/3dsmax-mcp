@@ -48,7 +48,7 @@ PLUGIN_OVERLAYS: dict[str, dict[str, Any]] = {
             "Sun RGB selects the legacy sun model; physical sun color comes from its solar model. FStormSunLight supplies sun only: create_lights does not add FStormSky or change the environment. IES and texture-color creation have no typed route yet.",
             "Create an empty FStormBitmap without assigning an empty filename. A filename-poke reload workaround is unverified; never clear paths as an automatic reload operation.",
             "Do not assume FrontBack slot indices or connect a wrapper to itself. Preserve shared maps and undefined inputs.",
-            "FStorm output uses native renderer power. No photometric conversion, renderer switching or FStorm VFB preview is provided.",
+            "FStorm output uses native renderer power. No photometric conversion, renderer switching or owned FStorm preview startup is provided. Capture an open FStorm RT window with capture_screen(enabled=true, target=\"fstorm_vfb\"), optionally cropped; requires the updated native bridge.",
             "FStormCamera uses targ_dist, while FStormLight and FStormSunLight expose target_distance. Inspect the actual target reference rather than inferring its name.",
         ],
     },

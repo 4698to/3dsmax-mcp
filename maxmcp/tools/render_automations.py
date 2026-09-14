@@ -151,13 +151,15 @@ def render_automations(
                the renderer must check the flag. A cancelling response is not proof
                that rendering has stopped; the completion signal does not reliably
                distinguish cancellation from success.
-      cancel_capture  Save the visible VFB image, then request cancellation for
+      cancel_capture  Save the unobscured VFB window image, then request cancellation for
                the matching armed job_id, through one independent connection.
                Use only for a render you armed and started. crop=[x,y,width,height]
-               trims physical client-area pixels. capture_target=vray_vfb or corona_vfb
+               trims physical client-area pixels. capture_target=vray_vfb, corona_vfb or fstorm_vfb
                selects that renderer's frame buffer; capture_target=screen is an
                explicit desktop fallback for another renderer's visible framebuffer.
-               Requires the updated bridge. Does not wait for Max or denoising.
+               Window capture excludes overlaps, requires an open/non-minimized VFB
+               and never falls back to desktop pixels. Requires the updated bridge.
+               Does not wait for render convergence or denoising.
                Configure progressive sampling and the renderer's denoiser BEFORE
                starting a production preview; this cannot retrofit a blocked render.
                The result is partial evidence, never proof of a stopped/denoised render.
@@ -173,8 +175,8 @@ def render_automations(
         from .viewport import _validate_screen_crop
         if not job_id:
             raise ValueError("cancel_capture requires the job_id you armed before starting this render")
-        if capture_target not in {"vray_vfb", "corona_vfb", "screen"}:
-            raise ValueError("capture_target must be vray_vfb, corona_vfb or screen")
+        if capture_target not in {"vray_vfb", "corona_vfb", "fstorm_vfb", "screen"}:
+            raise ValueError("capture_target must be vray_vfb, corona_vfb, fstorm_vfb or screen")
         if crop is not None:
             _validate_screen_crop(crop)
         payload = {"job_id":job_id, "target":capture_target, "max_width":1600}
@@ -182,7 +184,15 @@ def render_automations(
         # A dedicated route makes old bridges fail BEFORE sending any global abort.
         response = client.send_command(json.dumps(payload), cmd_type="native:render_cancel_capture")
         raw = response.get("result", "")
-        return json.loads(raw) if isinstance(raw, str) else raw
+        result = json.loads(raw) if isinstance(raw, str) else raw
+        capture = result.get("capture")
+        if capture_target != "screen" and capture is not None and (
+            capture.get("capture_contract") != "window_capture_v1" or capture.get("occlusion_free") is not True
+        ):
+            result["capture"] = None
+            result["capture_error"] = "Updated native bridge required for unobscured window capture; legacy image withheld. Cancellation result retained."
+            result["captured_before_cancel"] = False
+        return result
 
     if action == "start":
         return _do_start(watch_timeout_sec)

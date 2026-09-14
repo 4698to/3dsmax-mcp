@@ -11,7 +11,20 @@ materials), `smart_import`, and texture-built shell materials accept:
 The requested class is preserved. Missing plugins or properties fail the build;
 there is no fallback to another renderer. These tools do not switch the active
 renderer. Install this source branch and restart the MCP server to use the new
-Python routes; no native bridge rebuild is needed.
+material and lighting routes; no native bridge rebuild is needed for those routes.
+
+## RT screen capture
+
+`capture_screen(enabled=True, target="fstorm_vfb")` captures the unobscured FStorm
+RT client area belonging to the connected Max instance. Optional
+`crop=[x,y,width,height]` trims physical client pixels before resizing. Keep RT
+open and non-minimized; overlapping windows are excluded without activation. This requires
+the updated native bridge and a fresh MCP server. Failure never substitutes desktop pixels.
+
+Capture does not start or stop RT, change its view, or certify convergence.
+FStorm is not an owned `agent_viewport` render mode. `render_automations` also
+accepts `capture_target="fstorm_vfb"` for `cancel_capture` of its armed render job;
+that route retains its existing cooperative cancellation behavior.
 
 For example:
 

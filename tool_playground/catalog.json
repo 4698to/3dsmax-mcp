@@ -6572,6 +6572,9 @@
             "items": {
               "type": "integer"
             }
+          },
+          "capture_method": {
+            "type": "string"
           }
         }
       },
@@ -6609,6 +6612,9 @@
           },
           "source": {
             "type": "string"
+          },
+          "capture_method": {
+            "type": "string"
           }
         }
       },
@@ -6619,7 +6625,7 @@
     },
     {
       "name": "capture_screen",
-      "description": "Capture visible desktop pixels, optionally cropped to a V-Ray or Corona frame buffer.",
+      "description": "Capture the desktop or an unobscured V-Ray, Corona or FStorm frame buffer.",
       "category": "Viewport",
       "group": "Viewport & Render",
       "module": "viewport",
@@ -6681,6 +6687,9 @@
             "type": "boolean"
           },
           "source": {
+            "type": "string"
+          },
+          "capture_method": {
             "type": "string"
           }
         }

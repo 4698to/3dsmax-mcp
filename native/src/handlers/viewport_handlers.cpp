@@ -5,6 +5,7 @@
 #include "mcp_bridge/spatial_snapshot.h"
 #include "mcp_bridge/agent_viewport.h"
 #include "mcp_bridge/capture_region.h"
+#include "mcp_bridge/window_capture.h"
 #include <cwctype>
 
 #include <GraphicsWindow.h>
@@ -148,6 +149,22 @@ static Gdiplus::Bitmap* CaptureViewportDIB(ViewExp* vp) {
     bmp->UnlockBits(&data);
     free(bmi);
     return bmp;
+}
+
+static WindowCapture::Result CaptureViewportImage(ViewExp& view,const std::string& method) {
+    if(method!="auto" && method!="window") throw std::runtime_error("capture_method must be auto or window");
+    if(method=="auto") {
+        std::unique_ptr<Gdiplus::Bitmap> dib(CaptureViewportDIB(&view));
+        if(dib && dib->GetLastStatus()==Gdiplus::Ok && dib->GetWidth()>0 && dib->GetHeight()>0)
+            return {std::move(dib),"nitrous_dib"};
+    }
+    auto* gw=view.getGW();
+    if(!gw) throw std::runtime_error("Viewport graphics window is unavailable");
+    const int width=gw->getWinSizeX(),height=gw->getWinSizeY();
+    auto image=WindowCapture::Client(view.GetHWnd());
+    if(image.bitmap->GetWidth()!=width || image.bitmap->GetHeight()!=height)
+        throw std::runtime_error("Window/viewport pixel dimensions disagree; targeting would be inaccurate");
+    return image;
 }
 
 // ── Helper: draw label on a GDI+ Graphics context ───────────
@@ -438,6 +455,8 @@ std::string NativeHandlers::CaptureMultiViewMainThread(const std::string& params
     if (p.is_discarded() || !p.is_object()) {
         throw std::runtime_error("Invalid JSON payload");
     }
+    const auto captureMethod=p.value("capture_method","auto");
+    if(captureMethod!="auto" && captureMethod!="window") throw std::runtime_error("capture_method must be auto or window");
     int maxWidth = p.value("max_width", 1600);
     int maxHeight = p.value("max_height", 0);
     if(maxWidth<0 || maxHeight<0 || maxWidth>8192 || maxHeight>8192)
@@ -568,6 +587,7 @@ std::string NativeHandlers::CaptureMultiViewMainThread(const std::string& params
     // Capture each view
     std::vector<std::unique_ptr<Gdiplus::Bitmap>> captures;
     json agentViews=json::array();
+    json captureMethods=json::array();
     int vpWidth = 0, vpHeight = 0;
 
     for (auto& view : views) {
@@ -600,8 +620,11 @@ std::string NativeHandlers::CaptureMultiViewMainThread(const std::string& params
 
         // Capture
         ViewExp& activeVP = agent ? AgentViewport::Get() : ip->GetActiveViewExp();
-        std::unique_ptr<Gdiplus::Bitmap> bmp(
-            CaptureViewportDIB(&activeVP));
+        auto captured=CaptureViewportImage(activeVP,captureMethod);
+        if(agent && AgentViewport::Snapshot().at("view_token")!=agentViews.back().at("view_token"))
+            throw std::runtime_error("STALE_VIEW: agent view changed during capture");
+        captureMethods.push_back(captured.method);
+        std::unique_ptr<Gdiplus::Bitmap> bmp(std::move(captured.bitmap));
         if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok ||
             bmp->GetWidth() == 0 || bmp->GetHeight() == 0) {
             throw std::runtime_error("Failed to capture viewport for: " + view.name);
@@ -708,6 +731,9 @@ std::string NativeHandlers::CaptureMultiViewMainThread(const std::string& params
     result["size_bytes"] = outputSize;
     result["views"] = actualViewNames;
     result["source"]=agent ? "agent" : "active";
+    result["capture_contract"]="viewport_capture_v2";
+    result["occlusion_free"]=true;
+    result["capture_methods"]=captureMethods;
     if(agent) {
         result["agent_views"]=agentViews;
         result["restored_agent_viewport"]=AgentViewport::Snapshot();
@@ -746,6 +772,8 @@ std::string NativeHandlers::CaptureViewportMainThread(const std::string& params)
 
     json p = json::parse(params, nullptr, false);
     if(p.is_discarded() || !p.is_object()) throw std::runtime_error("Invalid JSON payload");
+    const auto captureMethod=p.value("capture_method","auto");
+    if(captureMethod!="auto" && captureMethod!="window") throw std::runtime_error("capture_method must be auto or window");
     int maxWidth = p.value("max_width", 1600);
     int maxHeight = p.value("max_height", 0);
     if(maxWidth<0 || maxHeight<0 || maxWidth>8192 || maxHeight>8192)
@@ -760,7 +788,11 @@ std::string NativeHandlers::CaptureViewportMainThread(const std::string& params)
     if(agent) AgentViewport::Redraw(); else ip->ForceCompleteRedraw(FALSE);
 
     ViewExp& vp = agent ? AgentViewport::Get() : ip->GetActiveViewExp();
-    Gdiplus::Bitmap* bmp = CaptureViewportDIB(&vp);
+    const auto captureView=agent ? AgentViewport::Snapshot().at("view_token") : json(nullptr);
+    auto captured=CaptureViewportImage(vp,captureMethod);
+    if(agent && AgentViewport::Snapshot().at("view_token")!=captureView)
+        throw std::runtime_error("STALE_VIEW: agent view changed during capture");
+    Gdiplus::Bitmap* bmp = captured.bitmap.release();
     if (!bmp) throw std::runtime_error("Failed to capture viewport DIB");
 
     int sourceW = (int)bmp->GetWidth();
@@ -812,6 +844,9 @@ std::string NativeHandlers::CaptureViewportMainThread(const std::string& params)
     result["source_width"] = sourceW;
     result["source_height"] = sourceH;
     result["source"]=agent ? "agent" : "active";
+    result["capture_contract"]="viewport_capture_v2";
+    result["capture_method"]=captured.method;
+    result["occlusion_free"]=true;
     if(agent) result["agent_viewport"]=AgentViewport::Snapshot();
     auto serialized=result.dump();
     outputFile.Keep();
@@ -822,8 +857,9 @@ std::string NativeHandlers::CaptureViewport(const std::string& params, MCPBridge
     return gup->GetExecutor().ExecuteSync([params]() { return CaptureViewportMainThread(params); });
 }
 
-// Screen pixels deliberately bypass Max's scene/main-thread executor. A VFB
-// crop is not an offscreen render-buffer export: occluding windows remain visible.
+// Window/desktop capture bypasses Max's scene executor. WindowCapture uses a
+// compositor frame off-thread, so a blocked renderer cannot stall cancellation
+// waiting for a synchronous PrintWindow call into Max's UI thread.
 namespace {
 struct CaptureDpiScope {
     using SetDpi=DPI_AWARENESS_CONTEXT (WINAPI*)(DPI_AWARENESS_CONTEXT);
@@ -879,7 +915,7 @@ std::string NativeHandlers::CaptureScreen(const std::string& params, MCPBridgeGU
     const json p=json::parse(params);
     if(!p.is_object()) throw std::runtime_error("Expected object payload");
     const std::string target=p.value("target","screen");
-    if(target!="screen" && target!="vray_vfb" && target!="corona_vfb") throw std::runtime_error("target must be screen, vray_vfb or corona_vfb");
+    if(target!="screen" && target!="vray_vfb" && target!="corona_vfb" && target!="fstorm_vfb") throw std::runtime_error("target must be screen, vray_vfb, corona_vfb or fstorm_vfb");
     const int maxWidth=p.value("max_width",1600), maxHeight=p.value("max_height",0);
     if(maxWidth<0 || maxHeight<0 || maxWidth>8192 || maxHeight>8192)
         throw std::runtime_error("Capture maximum dimensions must be between 0 and 8192");
@@ -901,16 +937,27 @@ std::string NativeHandlers::CaptureScreen(const std::string& params, MCPBridgeGU
     RECT desktop{GetSystemMetrics(SM_XVIRTUALSCREEN),GetSystemMetrics(SM_YVIRTUALSCREEN),0,0};
     desktop.right=desktop.left+GetSystemMetrics(SM_CXVIRTUALSCREEN);
     desktop.bottom=desktop.top+GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    if(region.x<desktop.left || region.y<desktop.top || region.x+region.width>desktop.right || region.y+region.height>desktop.bottom)
+    if(!window && (region.x<desktop.left || region.y<desktop.top || region.x+region.width>desktop.right || region.y+region.height>desktop.bottom))
         throw std::runtime_error("Capture region is partly offscreen; move the VFB fully onto the desktop");
     if(static_cast<uint64_t>(region.width)*region.height>134217728)
         throw std::runtime_error("Capture region is too large");
-    ScreenPixels pixels; pixels.Capture(region);
+    std::unique_ptr<ScreenPixels> desktopPixels;
+    std::unique_ptr<Gdiplus::Bitmap> bitmap;
+    const char* captureMethod="desktop_bitblt";
+    if(window) {
+        auto captured=WindowCapture::Client(window);
+        captureMethod=captured.method;
+        bitmap.reset(captured.bitmap->Clone(region.x-targetRect.x,region.y-targetRect.y,
+            region.width,region.height,PixelFormat24bppRGB));
+    } else {
+        desktopPixels=std::make_unique<ScreenPixels>();
+        desktopPixels->Capture(region);
+        bitmap.reset(Gdiplus::Bitmap::FromHBITMAP(desktopPixels->bitmap,nullptr));
+    }
     // Reject a moved/resized/replaced window rather than return a crop of the
     // wrong region when the user changes the layout during capture.
     if(window && CaptureRegion::Json(VfbClientRect(window))!=CaptureRegion::Json(targetRect))
         throw std::runtime_error("Frame buffer moved during capture; retry");
-    auto bitmap=std::unique_ptr<Gdiplus::Bitmap>(Gdiplus::Bitmap::FromHBITMAP(pixels.bitmap,nullptr));
     if(!bitmap || bitmap->GetLastStatus()!=Gdiplus::Ok) throw std::runtime_error("Could not read captured pixels");
     bitmap.reset(ResizeBitmapToMax(bitmap.release(),maxWidth,maxHeight));
     if(!bitmap || bitmap->GetLastStatus()!=Gdiplus::Ok) throw std::runtime_error("Could not resize captured pixels");
@@ -928,7 +975,8 @@ std::string NativeHandlers::CaptureScreen(const std::string& params, MCPBridgeGU
     options.Parameter[0].NumberOfValues=1; options.Parameter[0].Value=&quality;
     if(bitmap->Save(path.c_str(),&encoder,&options)!=Gdiplus::Ok) throw std::runtime_error("Could not save screen capture");
     return json({{"file",WideToUtf8(path.c_str())},{"width",bitmap->GetWidth()},{"height",bitmap->GetHeight()},
-        {"capture_contract","desktop_crop_v1"},{"target",target},{"window",windowInfo},
+        {"capture_contract",window ? "window_capture_v1" : "desktop_crop_v1"},{"target",target},{"window",windowInfo},
         {"screen_rect",CaptureRegion::Json(region)},{"target_rect",CaptureRegion::Json(targetRect)},
-        {"visible_pixels_only",true},{"occlusion_checked",false}}).dump();
+        {"capture_method",captureMethod},{"occlusion_free",window!=nullptr},
+        {"visible_pixels_only",window==nullptr},{"occlusion_checked",false}}).dump();
 }

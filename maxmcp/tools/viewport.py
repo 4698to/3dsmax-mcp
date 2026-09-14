@@ -30,6 +30,17 @@ def _source(value: str) -> str:
     return value
 
 
+def _capture_method(value: str) -> str:
+    if value not in {"auto", "window"}:
+        raise ValueError("capture_method must be auto or window")
+    return value
+
+
+def _verify_window_viewport(data: dict, method: str) -> None:
+    if method == "window" and (data.get("capture_contract") != "viewport_capture_v2" or data.get("occlusion_free") is not True):
+        raise RuntimeError("Window capture requires the updated native bridge; legacy image was not returned")
+
+
 def _validate_screen_crop(crop) -> None:
     if not isinstance(crop, (list, tuple)) or len(crop) != 4 or any(type(v) is not int for v in crop) or any(v < 0 for v in crop[:2]) or any(v <= 0 for v in crop[2:]):
         raise ValueError("crop must be [x,y,width,height] with nonnegative origin and positive integer size")
@@ -73,6 +84,7 @@ def agent_viewport(
     mode: str = "",
     renderer_source: str = "activeshade",
     crop: IntList | None = None,
+    capture_method: str = "auto",
 ) -> dict[str, Any]:
     """Own a shaded floating AGENT VIEWPORT without moving the user's view.
 
@@ -90,7 +102,9 @@ def agent_viewport(
     capture chooses the agent viewport or visible VFB automatically. Optional crop
     [x,y,width,height] is relative to the VFB client area in physical pixels.
     stop_capture saves the current image first, then stops the owned preview.
-    VFB screenshots include occluding windows; keep it visible and unobstructed.
+    VFB captures exclude overlapping windows. capture_method=window selects Windows
+    window capture for the agent panel; auto prefers its direct Nitrous buffer.
+    Both require an open, non-minimized panel; neither activates or uncovers it.
     V-Ray's menu API briefly requires internal viewport activation, then restores
     the user's view and focus. Status reports render mode and capabilities.
     Render captures show progressive pixels, not proof that rendering is current
@@ -118,6 +132,9 @@ def agent_viewport(
     """
     if action not in {"open","status","release","minimize","restore","frame","orbit","pan","zoom","ray","pick","project","render","capture","stop_capture"}:
         raise ValueError("Unknown agent viewport action")
+    _capture_method(capture_method)
+    if capture_method != "auto" and action not in {"capture", "stop_capture"}:
+        raise ValueError("capture_method applies only to capture or stop_capture")
     if action == "render":
         if mode not in {"shaded", "activeshade", "vray_ipr", "vray_vfb", "corona_vfb"}:
             raise ValueError("render requires mode=shaded, activeshade, vray_ipr, vray_vfb, or corona_vfb")
@@ -173,7 +190,7 @@ def agent_viewport(
         else:
             if crop is not None:
                 raise ValueError("crop requires a VFB preview")
-            capture = capture_viewport(source="agent")
+            capture = capture_viewport(source="agent", **({"capture_method":capture_method} if capture_method!="auto" else {}))
         result = {"capture":capture, "render":render, "converged":None}
         if action == "stop_capture":
             stopped = agent_viewport(action="render", mode="shaded")
@@ -419,12 +436,16 @@ def capture_viewport(
     max_height: int = 0,
     return_image: bool = False,
     source: str = "auto",
+    capture_method: str = "auto",
 ) -> Any:
     """Capture AGENT VIEWPORT when open, otherwise the active view, to a saved file.
 
     Read the returned `file` path to view the capture. return_image is
     deprecated and ignored — the image is never inlined.
     source: auto | agent | active. Explicit agent never falls back into a user view.
+    capture_method: auto prefers the direct Nitrous buffer, with window capture
+    if unavailable; window requests Windows client capture. Both exclude other
+    windows. Minimized/hidden agent panels still refuse capture; no view is activated.
 
     Use when: quick visual proof after a scene change.
     Not when: the user asked for a full render (render_scene) or a multi-angle grid
@@ -434,12 +455,16 @@ def capture_viewport(
     max_height = max(0, int(max_height))
     _source(source)
 
+    _capture_method(capture_method)
+
     if client.native_available:
         p={"max_width":max_width,"max_height":max_height}
+        if capture_method!="auto": p["capture_method"]=capture_method
         if source!="auto": p["source"]=source
         if source=="agent": p["action"]="capture"
         response = client.send_command(json.dumps(p), cmd_type="native:agent_viewport" if source=="agent" else "native:capture_viewport")
         data = json.loads(response.get("result", "{}"))
+        _verify_window_viewport(data,capture_method)
         file_path = data.get("file", "")
         if file_path:
             result = _image_file_result(
@@ -449,10 +474,11 @@ def capture_viewport(
                 height=data.get("height"),
                 inline=return_image,
             )
-            for key in ("source","agent_viewport","source_width","source_height"):
+            for key in ("source","agent_viewport","source_width","source_height","capture_contract","capture_method","occlusion_free"):
                 if key in data: result[key]=data[key]
             return result
 
+    if capture_method=="window": raise RuntimeError("Window capture requires the updated native bridge")
     if source=="agent": raise RuntimeError("AGENT VIEWPORT returned no capture; active view was not used")
 
     capture_path = os.path.join(COMMS_DIR, f"viewport_{uuid4().hex}.png").replace("\\", "/")
@@ -476,22 +502,23 @@ def capture_screen(
     target: str = "screen",
     crop: IntList | None = None,
 ) -> Any:
-    """Capture visible desktop pixels, optionally cropped to a V-Ray or Corona frame buffer.
+    """Capture the desktop or an unobscured V-Ray, Corona or FStorm frame buffer.
 
     Read the returned `file` path to view the capture. return_image is
     deprecated and ignored — the image is never inlined.
-    target=screen captures the primary monitor; vray_vfb or corona_vfb finds that
-    renderer's visible Frame Buffer belonging to this Max process and captures its
+    target=screen captures the primary monitor; vray_vfb, corona_vfb or fstorm_vfb
+    finds that renderer's open Frame Buffer (FStorm RT) in this Max process and captures its
     client area. crop=[x,y,width,height] is relative to that area in physical
-    pixels BEFORE resizing, for example to exclude VFB toolbars. The window must
-    be fully on screen. Overlapping windows appear in the image; this does not
-    activate, uncover, start, stop, or wait for a render. Cropped capture requires
-    the updated native bridge; it never falls back to a full desktop image.
+    pixels BEFORE resizing, for example to exclude VFB toolbars. Window capture
+    excludes overlapping windows without activating or uncovering the target.
+    Keep it open and non-minimized. Windows may briefly show a capture border.
+    This does not start, stop, or wait for render convergence. Window capture requires
+    the updated bridge and never falls back to desktop pixels on failure.
     """
     if not enabled:
         raise ValueError("capture_screen is disabled by default; set enabled=True to allow fullscreen capture")
-    if target not in {"screen", "vray_vfb", "corona_vfb"}:
-        raise ValueError("target must be screen, vray_vfb or corona_vfb")
+    if target not in {"screen", "vray_vfb", "corona_vfb", "fstorm_vfb"}:
+        raise ValueError("target must be screen, vray_vfb, corona_vfb or fstorm_vfb")
     if crop is not None:
         _validate_screen_crop(crop)
 
@@ -506,8 +533,11 @@ def capture_screen(
         response = client.send_command(payload, cmd_type="native:capture_screen")
         data = json.loads(response.get("result", "{}"))
         file_path = data.get("file", "")
-        if (target != "screen" or crop is not None) and data.get("capture_contract") != "desktop_crop_v1":
+        expected_contract = "window_capture_v1" if target != "screen" else "desktop_crop_v1"
+        if (target != "screen" or crop is not None) and data.get("capture_contract") != expected_contract:
             raise RuntimeError("Cropped screen capture requires the updated native bridge; uncropped image was not returned")
+        if target != "screen" and data.get("occlusion_free") is not True:
+            raise RuntimeError("Window capture did not establish an unobscured source; image was not returned")
         if file_path:
             result = _image_file_result(
                 file_path,
@@ -516,7 +546,7 @@ def capture_screen(
                 height=data.get("height"),
                 inline=return_image,
             )
-            for key in ("capture_contract", "target", "screen_rect", "target_rect", "window", "visible_pixels_only", "occlusion_checked"):
+            for key in ("capture_contract", "capture_method", "occlusion_free", "target", "screen_rect", "target_rect", "window", "visible_pixels_only", "occlusion_checked"):
                 if key in data: result[key] = data[key]
             return result
 
@@ -563,10 +593,13 @@ def capture_multi_view(
     return_image: bool = False,
     frame_root: str = "",
     source: str = "auto",
+    capture_method: str = "auto",
 ) -> Any:
     """Capture multiple viewport angles to a stitched file and return compact metadata.
 
     Uses AGENT VIEWPORT when open; source=active explicitly uses the user view.
+    capture_method=auto prefers Nitrous with window capture if unavailable;
+    window uses Windows client capture for every tile. Both exclude overlapping windows.
     frame_root frames a named hierarchy. In the agent panel it does not hide other
     nodes; in legacy active mode it also temporarily isolates that hierarchy.
     Read the returned `file` path to view the grid. return_image is deprecated
@@ -577,6 +610,8 @@ def capture_multi_view(
     """
     payload = {}
     _source(source)
+    _capture_method(capture_method)
+    if capture_method!="auto": payload["capture_method"]=capture_method
     if source!="auto": payload["source"]=source
     if frame_root:
         payload["frame_root"] = frame_root
@@ -588,6 +623,7 @@ def capture_multi_view(
     response = client.send_command(json.dumps(payload), cmd_type="native:agent_viewport" if source=="agent" else "native:capture_multi_view")
     raw = response.get("result", "")
     data = json.loads(raw)
+    _verify_window_viewport(data,capture_method)
     file_path = data.get("file", "")
     if not file_path:
         raise RuntimeError("No image file returned from multi-view capture")
@@ -601,6 +637,6 @@ def capture_multi_view(
     result["views"] = data.get("views")
     result["grid"] = data.get("grid")
     result["framed_root"] = data.get("framed_root")
-    for key in ("source","agent_views","restored_agent_viewport","isolation_applied"):
+    for key in ("source","agent_views","restored_agent_viewport","isolation_applied","capture_contract","capture_methods","occlusion_free"):
         if key in data: result[key]=data[key]
     return result

@@ -10,6 +10,12 @@ inline bool MatchesVfb(const std::string& target, std::wstring title, std::wstri
     const auto lower=[](wchar_t c) { return std::towlower(c); };
     std::transform(title.begin(),title.end(),title.begin(),lower);
     std::transform(windowClass.begin(),windowClass.end(),windowClass.begin(),lower);
+    if(target=="fstorm_vfb") {
+        // FStorm 2.0 RT uses a native dialog with live sample/size metadata.
+        // Exclude Render Setup, material dialogs and similarly named scenes.
+        return windowClass==L"#32770" && title.rfind(L"fstorm rt: samples ",0)==0 &&
+            title.find(L",  resolution ")!=std::wstring::npos && title.find(L",  zoom ")!=std::wstring::npos;
+    }
     if(target=="corona_vfb") {
         // VFB 2 has a product/version caption rather than the text "VFB".
         // Require its renderer-owned Qt class and frame metadata so a Corona
