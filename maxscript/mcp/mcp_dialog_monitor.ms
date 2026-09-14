@@ -26,6 +26,9 @@ struct DialogMonitorStruct
 	lastImageHeight = 0,
 	lastScreenRect = #(0, 0, 0, 0), -- #(x, y, w, h)
 
+	-- Max 2015: `this.normalizeTitle child[5]` is parsed as a 0-arg call.
+	-- Always pass `(expr)`. Do NOT use keyword defaults here — Max 2015
+	-- then reports "wanted 0, got 1" for positional `this.normalizeTitle (x)`.
 	fn normalizeTitle raw =
 	(
 		if raw == undefined then "" else (raw as string)
@@ -98,8 +101,8 @@ struct DialogMonitorStruct
 
 		for child in children where child != undefined and child.count >= 5 do
 		(
-			local hwnd = this.asHwndInt child[1]
-			local title = this.normalizeTitle child[5]
+			local hwnd = this.asHwndInt (child[1])
+			local title = this.normalizeTitle (child[5])
 			if (this.matchTitle title titlePat:titlePat vendorPat:vendorPat requireVendor:requireVendor) do
 			(
 				local accept = true
@@ -119,7 +122,7 @@ struct DialogMonitorStruct
 		if matches.count > 0 then
 		(
 			this.lastHwnd = matches[1][1]
-			this.lastTitle = this.normalizeTitle matches[1][5]
+			this.lastTitle = this.normalizeTitle (matches[1][5])
 		)
 		else
 		(
@@ -159,7 +162,7 @@ struct DialogMonitorStruct
 		(
 			local row = matches[i]
 			local hwnd = row[1]
-			local title = this.normalizeTitle row[5]
+			local title = this.normalizeTitle (row[5])
 			local className = if row.count >= 4 then (row[4] as string) else ""
 			local posStr = ""
 			local geom = this.getWindowGeom hwnd
@@ -255,8 +258,8 @@ struct DialogMonitorStruct
 		local matches = this.findDialog visibleOnly:visibleOnly parentType:parentType
 		if matches.count == 0 do
 			return ("ERROR: dialog not found (title=" + this.titlePattern + " vendor=" + this.vendorPattern + ")")
-		local hwnd = this.asHwndInt matches[1][1]
-		this.lastTitle = this.normalizeTitle matches[1][5]
+		local hwnd = this.asHwndInt (matches[1][1])
+		this.lastTitle = this.normalizeTitle (matches[1][5])
 		format "MCP_DialogMonitor: capturing % hwnd=%\n" this.lastTitle hwnd
 		this.captureHwnd hwnd outfile:outfile displayResult:displayResult
 	),
@@ -265,8 +268,8 @@ struct DialogMonitorStruct
 	(
 		local matches = this.findGoSkin visibleOnly:visibleOnly
 		if matches.count == 0 do return "ERROR: dialog not found (自动蒙皮4.* / 天晴数码)"
-		local hwnd = this.asHwndInt matches[1][1]
-		this.lastTitle = this.normalizeTitle matches[1][5]
+		local hwnd = this.asHwndInt (matches[1][1])
+		this.lastTitle = this.normalizeTitle (matches[1][5])
 		this.captureHwnd hwnd outfile:outfile displayResult:displayResult
 	),
 
@@ -286,8 +289,8 @@ struct DialogMonitorStruct
 				(this.escapeJson this.vendorPattern) + "\"}")
 		)
 
-		local hwnd = this.asHwndInt matches[1][1]
-		local title = this.normalizeTitle matches[1][5]
+		local hwnd = this.asHwndInt (matches[1][1])
+		local title = this.normalizeTitle (matches[1][5])
 		this.lastTitle = title
 		this.lastHwnd = hwnd
 
@@ -411,7 +414,7 @@ struct DialogMonitorStruct
 			local cls = child[4] as string
 			if cls == "#32768" do
 			(
-				local hwnd = this.asHwndInt child[1]
+				local hwnd = this.asHwndInt (child[1])
 				local vis = true
 				try (vis = windows.isWindowVisible hwnd) catch ()
 				if vis and hwnd != 0 do
@@ -421,7 +424,7 @@ struct DialogMonitorStruct
 					(
 						append items (
 							"{\"hwnd\":" + (hwnd as string) + \
-							",\"title\":\"" + (this.escapeJson (this.normalizeTitle child[5])) + "\"" + \
+							",\"title\":\"" + (this.escapeJson (this.normalizeTitle (child[5]))) + "\"" + \
 							",\"screen_rect\":{\"x\":" + (geom[1] as string) + ",\"y\":" + (geom[2] as string) + \
 								",\"w\":" + (geom[3] as string) + ",\"h\":" + (geom[4] as string) + "}}"
 						)
@@ -451,7 +454,7 @@ struct DialogMonitorStruct
 			local cls = child[4] as string
 			if cls == "#32768" do
 			(
-				local hwnd = this.asHwndInt child[1]
+				local hwnd = this.asHwndInt (child[1])
 				local vis = true
 				try (vis = windows.isWindowVisible hwnd) catch ()
 				if vis and hwnd != 0 do

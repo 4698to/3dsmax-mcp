@@ -59,6 +59,7 @@ struct MCPServerStruct
 	activePollTicksRemaining = 0,
 	activePollTicksAfterRequest = 10,
 	heartbeatTimer = undefined,
+	pendingCheckErrorLogged = false,
 
 	fn nativeBridgeAvailable =
 	(
@@ -489,17 +490,34 @@ struct MCPServerStruct
 	-- Max 2015/2016 often resolve Write/WriteLine(MAXScript string) to the
 	-- char overload (only the first character is sent). Writing one character at
 	-- a time makes that overload correct by construction.
+	-- Do NOT AutoFlush per character: Python closes as soon as it sees '\n',
+	-- and a slow per-char flush races into "connection aborted by the host".
 	fn writeResponseLine stream text =
 	(
 		local s = if text != undefined then (text as string) else ""
 		-- UTF8Encoding(false) = no BOM. Default Encoding.UTF8 writes a BOM that
 		-- breaks JSON parsers on the Python side.
 		local enc = dotNetObject "System.Text.UTF8Encoding" false
-		local writer = dotNetObject "System.IO.StreamWriter" stream enc
-		writer.AutoFlush = true
+		-- Prefer leaveOpen=true so disposing the writer does not tear down the
+		-- NetworkStream. Fall back if the 4-arg ctor is unavailable.
+		local writer = undefined
+		try (writer = dotNetObject "System.IO.StreamWriter" stream enc 1024 true) catch ()
+		if writer == undefined do writer = dotNetObject "System.IO.StreamWriter" stream enc
+		writer.AutoFlush = false
 		for i = 1 to s.count do writer.Write (substring s i 1)
 		writer.Write ((dotNetClass "System.Environment").NewLine)
 		writer.Flush()
+		try (stream.Flush()) catch ()
+		try (writer.Dispose()) catch ()
+	),
+
+	fn isBenignSocketAbort errText =
+	(
+		local e = if errText != undefined then (errText as string) else ""
+		(findString e "connection was aborted") != undefined or \
+			(findString e "Connection was aborted") != undefined or \
+			(findString e "forcibly closed") != undefined or \
+			(findString e "Connection reset") != undefined
 	),
 
 	-- Handle a single client connection
@@ -533,7 +551,11 @@ struct MCPServerStruct
 				)
 				catch
 				(
-					format "MCP: Write response failed: %\n" (getCurrentException())
+					-- Client often closes right after reading the JSON line (probes /
+					-- short timeouts). That abort on the final flush is benign.
+					local err = getCurrentException()
+					if not (isProbe and (this.isBenignSocketAbort err)) do \
+						format "MCP: Write response failed: %\n" err
 				)
 			)
 			else
@@ -576,30 +598,49 @@ struct MCPServerStruct
 		)
 	),
 
-	-- 3ds Max 2015 exposes TcpListener.Pending() as a callable method; call it directly.
+	-- Call a parameterless instance method via Reflection.
+	-- Max 2015's `dotNet` struct has no `invokeMethod`. Direct calls like
+	-- `tcpListener.Pending()` also fail on some Chinese Max builds (IME name clash).
+	fn invokeNetMethod obj methodName =
+	(
+		local mi = (obj.GetType()).GetMethod methodName
+		if mi == undefined do throw ("Method not found: " + methodName)
+		mi.Invoke obj undefined
+	),
+
+	-- Non-blocking pending-connection check.
 	fn hasPending =
 	(
-		local pending = false
-		try (pending = MCP_Server.tcpListener.Pending()) catch (
-			format "MCP: TcpListener.Pending() error: %\n" (getCurrentException())
-			pending = false
+		if MCP_Server.tcpListener == undefined do (return false)
+		try
+		(
+			--local result = MCP_Server.invokeNetMethod MCP_Server.tcpListener "Pending"
+			local result = MCP_Server.tcpListener.Pending()
+			return result
 		)
-		pending
+		catch
+		(
+			if MCP_Server.pendingCheckErrorLogged != true then
+			(
+				format "MCP: TcpListener Pending check failed: %\n" (getCurrentException())
+				MCP_Server.pendingCheckErrorLogged = true
+			)
+			false
+		)
 	),
 
 	-- Timer tick: check for pending connections
 	fn onTick sender args =
 	(
 		if MCP_Server == undefined or not MCP_Server.isRunning then return()
+		if MCP_Server.tcpListener == undefined then return()
 
 		try
 		(
-			-- Non-blocking connection check via TcpListener.Pending() (a
-			-- callable method on the Max 2015 bridge, unlike property access).
 			if MCP_Server.hasPending() then
 			(
 				MCP_Server.armActivePolling()
-				local client = MCP_Server.tcpListener.AcceptTcpClient()
+				local client = MCP_Server.invokeNetMethod MCP_Server.tcpListener "AcceptTcpClient"
 				MCP_Server.handleClient client
 			)
 			else
@@ -667,6 +708,7 @@ struct MCPServerStruct
 					dotNet.setLifetimeControl MCP_Server.tcpListener #mxs  -- keep listener alive; #dotnet would let GC close the socket
 					MCP_Server.tcpListener.Start()
 					MCP_Server.isRunning = true
+					MCP_Server.pendingCheckErrorLogged = false
 				)
 				catch
 				(
@@ -772,201 +814,6 @@ if envPort != undefined and envPort.count > 0 then
 	format "MCP Commit :\n	MCP_Server.start()\n	MCP_Server.stop()\n	MCP_UI.show()\n"  
 )
 
-/*
---------------------------------------------------------------------
-场景管理结构体 (与 v1 相同)
---------------------------------------------------------------------
-*/
-fn fn_dialogMonitor_missing_xfefs = (
-	try (
-		local hwnd = dialogMonitorOps.getWindowHandle()
-		if hwnd != 0 do (
-			local title = UIAccessor.GetWindowText hwnd
-			if title != undefined do (
-				if (findString title "Missing XRefs") != undefined do (
-					UIAccessor.PressButtonByName hwnd "OK"
-					print ("已自动关闭弹窗(dialogMonitor): " + title)
-					return true
-				)
-				if (findString title "Missing External Files") != undefined do (
-					UIAccessor.PressButtonByName hwnd "Continue"
-					print ("已自动关闭弹窗: " + title)
-					return true
-				)
-				if (findString title "Missing Map Coordinates") != undefined do (
-					UIAccessor.PressButtonByName hwnd "Continue"
-					print ("已自动关闭弹窗(dialogMonitor): " + title)
-					return true
-				)
-			)
-		)
-	) catch ()
-	false
-)
-
-struct SceneManageStruct
-(
-	-- Load a .max scene file with existence + version guards.
-	-- Returns "Loaded scene: <name>" or "ERROR: ...".
-	fn loadScene filePath =
-	(
-		if not (doesFileExist filePath) do(
-			return ("ERROR: file not found: " + filePath)
-		)
-		-- 版本检查：文件主版本号不得高于当前 3ds Max 主版本号
-		local versionOk = true
-		local versionInfo = ""
-		try
-		(
-			local fileData = getMaxFileVersionData filePath
-			local fileMajor = 0
-			if fileData != undefined and fileData.count >= 1 do fileMajor = fileData[1]
-			local curMajor = 0
-			try
-			(
-				local mv = maxVersion()
-				-- maxVersion() 返回数组（新版本）或整数（旧版本），两种都兼容
-				if mv.count != undefined then
-					(curMajor = mv[1])
-				else
-					(curMajor = mv)
-			) catch ()
-			versionInfo = "file " + (fileMajor as string) + " vs max " + (curMajor as string)
-			if curMajor > 0 and fileMajor > curMajor do versionOk = false
-		)
-		catch
-		(
-			versionInfo = "version unreadable"
-		)
-
-		if not versionOk do(
-			return ("ERROR: unsupported file version (" + versionInfo + ")")
-		)
-		dialogMonitorOps.enabled = true
-		dialogMonitorOps.interactive = false
-		dialogMonitorOps.registerNotification fn_dialogMonitor_missing_xfefs id:#missingXfefs
-
-		missingXRefs_val = #()
-		missingExtFiles_val = #()
-		missingDLLsList_val = #()
-
-		--loadMaxFile filePath quiet:true
-		loadMAXFile filePath useFileUnits:true missingXRefsAction:#logmsg missingExtFilesActio:#logmsg missingDLLsAction:#logmsg missingXRefsList:&missingXRefs_val missingDLLsList:&missingDLLsList_val missingExtFilesList:&missingExtFiles_val quiet:true  -- 打开max 文件
-
-		if objects.count == 0 do
-		(
-			format "loadMAXFile  文件版本不支持，放弃加载-> %\n" filePath
-		)
-		-- 注销 missing xfefs 弹窗监听
-		dialogMonitorOps.unregisterNotification id:#missingXfefs
-		dialogMonitorOps.enabled = false
-		dialogMonitorOps.interactive = true
-
-		"Loaded scene: " + maxFileName
-	),
-
-	-- Snapshot current state into Max's hold buffer.
-	fn holdState =
-	(
-		holdMaxFile()
-		"Hold saved successfully"
-	),
-
-	-- Restore the held state.
-	fn fetchState =
-	(
-		fetchMaxFile quiet:true
-		"Fetched (restored) held state"
-	),
-
-	-- Start a new empty scene.
-	fn resetScene =
-	(
-		resetMaxFile #noPrompt
-		"Scene reset to empty"
-	),
-
-	-- Save the current scene back to its file path.
-	-- Returns the saved path, or "NO_FILE" when the scene was never saved.
-	fn saveScene =
-	(
-		local fp = maxFilePath + maxFileName
-		if fp == "" then(
-			"NO_FILE"
-		)
-		else
-		(
-			saveMaxFile fp
-			fp
-		)
-	),
-
-	-- Save the current scene as a file 3 major versions older than the
-	-- running 3ds Max (e.g. Max 2022 -> saved as Max 2019).
-	-- The copy is written to <name>_v<year>.max and does NOT overwrite
-	-- the original. Returns the new file path, or "NO_FILE" / "ERROR: ...".
-	-- NOTE: member name must NOT be `saveAsVersion` — that would collide
-	-- with the `saveAsVersion:` keyword of saveMaxFile() inside this body.
-	fn saveOlderVersion =
-	(
-		local fp = maxFilePath + maxFileName
-		if fp == "" then
-			return "NO_FILE"
-
-		-- 确定当前版本年份（Max 2022 的 maxVersion() 为数组，[8]=2022；
-		-- 旧版返回整数主版本，17 = Max 2015，年份 = 主版本 + 1998）
-		local mv = maxVersion()
-		local curYear = 0
-		if classOf mv == Array then
-		(
-			-- 优先取数组中的年份元素（2010..2100 范围）
-			curYear = mv[8]
-		)
-		else(
-			curYear = mv + 1998
-		)
-
-		if curYear <= 0 do(
-			return "ERROR: cannot determine current 3ds Max version"
-		)
-
-		local targetYear = curYear - 3
-		if targetYear < 2012 do targetYear = 2012  -- 最低支持到 3ds Max 2012
-
-		local newFp = \
-			(getFilenamePath fp) + (getFilenameFile fp) + \
-			"_v" + (targetYear as string) + (getFilenameType fp)
-
-		local saved = false
-		-- 新版（2016+）：saveMaxFile 原生 saveAsVersion:<年份> 参数（EMxsMaxFileVersion）
-		saved = saveMaxFile newFp saveAsVersion:targetYear quiet:true
-		if saved then newFp else "ERROR: save failed"
-	),
-
-	-- Basic scene info as a JSON-ish string.
-	fn getInfo =
-	(
-		local fp = maxFilePath + maxFileName
-		if fp == "" do fp = "(unsaved)"
-		local objCount = objects.count
-		local polyCount = 0
-		for obj in objects do
-		(
-			try
-			(
-				local m = snapshotAsMesh obj
-				polyCount += m.numFaces
-				delete m
-			) catch ()
-		)
-		"{" + \
-			"\"filePath\":\"" + (substituteString fp "\\" "\\\\") + "\"," + \
-			"\"objectCount\":" + (objCount as string) + "," + \
-			"\"polyCount\":" + (polyCount as string) + \
-		"}"
-	)
-)
-MCP_SceneManage = SceneManageStruct()
 
 /*
 --------------------------------------------------------------------
