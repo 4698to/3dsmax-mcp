@@ -75,6 +75,51 @@ _kernel32.CloseHandle.restype = wintypes.BOOL
 _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 _INVALID_HANDLE = wintypes.HANDLE(-1).value
 
+# Process-wide: TCP ping and native pipe probes must never overlap. Max is
+# single-threaded; list_instances / list_max_instances / background watchers
+# all take this lock. RLock so a held outer probe loop can call helpers.
+PROBE_SERIAL = threading.RLock()
+
+
+def _probe_named_pipe_unlocked(pipe_name: str) -> bool:
+    """OS-level named-pipe existence. Caller must hold PROBE_SERIAL."""
+    handle = _kernel32.CreateFileW(
+        pipe_name,
+        _GENERIC_READ | _GENERIC_WRITE,
+        0,
+        None,
+        _OPEN_EXISTING,
+        0,
+        None,
+    )
+    if handle != _INVALID_HANDLE:
+        _kernel32.CloseHandle(handle)
+        return True
+
+    err = ctypes.get_last_error()
+    if err in (_ERROR_PIPE_BUSY, _ERROR_ACCESS_DENIED):
+        return True
+    if err in (_ERROR_FILE_NOT_FOUND, _ERROR_PATH_NOT_FOUND):
+        return False
+
+    if _kernel32.WaitNamedPipeW(pipe_name, 0):
+        return True
+    wait_err = ctypes.get_last_error()
+    if wait_err in (_ERROR_SEM_TIMEOUT, _ERROR_PIPE_BUSY, _ERROR_ACCESS_DENIED):
+        return True
+    return False
+
+
+def probe_named_pipe(pipe_name: str) -> bool:
+    """OS-level named-pipe existence. Does not send a command into Max.
+
+    Treat busy/access-denied as available: the native listener exists, another
+    client just holds the instance. Missing pipe files are offline. Serialized
+    with TCP probes via PROBE_SERIAL.
+    """
+    with PROBE_SERIAL:
+        return _probe_named_pipe_unlocked(pipe_name)
+
 
 class AmbiguousMaxInstanceError(ConnectionError):
     """Raised when multiple live Max native bridges exist and none is claimed."""
@@ -183,14 +228,17 @@ class MaxClient:
 
     def _live_instances(self) -> list[dict[str, Any]]:
         live = []
-        for path in (self._config_dir() / "instances").glob("*.json"):
-            data = self._load_instance(path)
-            try:
-                updated = path.stat().st_mtime_ns
-            except OSError:
-                continue
-            if data and self._probe_pipe_available(data["pipe"]):
-                live.append({**data, "updated": updated})
+        paths = list((self._config_dir() / "instances").glob("*.json"))
+        # One pipe probe at a time, and never overlap TCP probes from list_instances.
+        with PROBE_SERIAL:
+            for path in paths:
+                data = self._load_instance(path)
+                try:
+                    updated = path.stat().st_mtime_ns
+                except OSError:
+                    continue
+                if data and _probe_named_pipe_unlocked(data["pipe"]):
+                    live.append({**data, "updated": updated})
         return sorted(live, key=lambda item: item["updated"], reverse=True)
 
     def _default_target(self) -> dict[str, Any]:
@@ -253,32 +301,7 @@ class MaxClient:
 
     def _probe_pipe_available(self, pipe_name: str | None = None) -> bool:
         """Best-effort probe that treats a busy pipe as available."""
-        pipe_name = pipe_name or self.pipe_name
-        handle = _kernel32.CreateFileW(
-            pipe_name,
-            _GENERIC_READ | _GENERIC_WRITE,
-            0,
-            None,
-            _OPEN_EXISTING,
-            0,
-            None,
-        )
-        if handle != _INVALID_HANDLE:
-            _kernel32.CloseHandle(handle)
-            return True
-
-        err = ctypes.get_last_error()
-        if err in (_ERROR_PIPE_BUSY, _ERROR_ACCESS_DENIED):
-            return True
-        if err in (_ERROR_FILE_NOT_FOUND, _ERROR_PATH_NOT_FOUND):
-            return False
-
-        if _kernel32.WaitNamedPipeW(pipe_name, 0):
-            return True
-        wait_err = ctypes.get_last_error()
-        if wait_err in (_ERROR_SEM_TIMEOUT, _ERROR_PIPE_BUSY, _ERROR_ACCESS_DENIED):
-            return True
-        return False
+        return probe_named_pipe(pipe_name or self.pipe_name)
 
     def _close_pipe_handle(self) -> None:
         handle = self._pipe_handle

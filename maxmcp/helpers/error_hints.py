@@ -89,10 +89,23 @@ MAXSCRIPT_SUGGESTION_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] 
     ),
     (
         re.compile(
-            r"\bholdMaxFile\b|\bfetchMaxFile\b|\bresetMaxFile\b|\bsaveMaxFile\b",
+            r"\bholdMaxFile\b|\bfetchMaxFile\b|\bresetMaxFile\b|\bsaveMaxFile\b|"
+            r"\bMCP_SceneManage\.(holdState|fetchState|resetScene|saveScene|getInfo|saveOlderVersion)\b",
             re.IGNORECASE,
         ),
         ("manage_scene",),
+    ),
+    (
+        re.compile(r"\bMCP_SceneManage\.loadScene\b|\bloadMAXFile\b", re.IGNORECASE),
+        ("load_scene",),
+    ),
+    (
+        re.compile(r"\bMCP_SceneManage\.getunhidden_meshes_bones\b", re.IGNORECASE),
+        ("get_unhidden_meshes_bones",),
+    ),
+    (
+        re.compile(r"\bMCP_SceneManage\.selectByHandles\b", re.IGNORECASE),
+        ("select_by_handles",),
     ),
     (
         re.compile(r"\bSelectionSets\b|\bnamedSelectionSets\b", re.IGNORECASE),

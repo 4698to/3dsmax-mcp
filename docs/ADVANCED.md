@@ -201,8 +201,11 @@ Manual rebuild:
 
 ```powershell
 python scripts/build_skill.py
-python scripts/build_skill.py --target global   # user-level .claude/skills and .agents/skills
+python scripts/build_skill.py --target local    # project: .cursor/skills + .agents/skills
+python scripts/build_skill.py --target global   # user: ~/.cursor/skills, ~/.claude/skills, ~/.agents/skills
 ```
+
+Cursor project skills are expected under `.cursor/skills/<name>/SKILL.md`. This repo keeps the source in `skills/3dsmax-mcp-dev/` and can junction/copy it into `.cursor/skills/3dsmax-mcp-dev` via `build_skill.py --target local`.
 
 Bundled MAXScript reference lives under `skills/3dsmax-mcp-dev/` (10 topic files). MCP resource: `resource://3dsmax-mcp/skill`.
 

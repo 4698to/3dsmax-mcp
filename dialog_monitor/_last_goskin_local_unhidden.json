@@ -1,0 +1,458 @@
+{
+  "scene": {
+    "mesh_count": 1,
+    "bone_count": 26,
+    "meshes": [
+      "lg_gx_1_1"
+    ],
+    "bones": [
+      "Bone_GX01",
+      "Bone_GX07",
+      "Bone_GX09",
+      "Bone_GX11",
+      "Bone_GX13",
+      "Bone_GX15",
+      "Bone_GX17",
+      "Bone_GX23",
+      "Bone_GX25",
+      "Bone_GX27",
+      "Bone_GX29",
+      "Bone_GX34",
+      "Bone_GX36",
+      "Bone_GX38",
+      "Bone_GX40",
+      "Bone_GX42",
+      "Bone_GX46",
+      "Bone_GX48",
+      "Bone_GX54",
+      "Bone_GX56",
+      "Bone_GX58",
+      "Bone_GX60",
+      "Bone_GX62",
+      "Bone_GX64",
+      "Bone_GX66",
+      "Bone_GX68"
+    ],
+    "meshes_handle": [
+      267
+    ],
+    "bones_handle": [
+      361,
+      373,
+      370,
+      376,
+      436,
+      364,
+      367,
+      379,
+      382,
+      388,
+      385,
+      394,
+      397,
+      433,
+      391,
+      400,
+      406,
+      403,
+      427,
+      424,
+      430,
+      421,
+      418,
+      412,
+      415,
+      409
+    ]
+  },
+  "ensure": {
+    "ok": true,
+    "steps": {
+      "detect": {
+        "ok": true,
+        "exists": false,
+        "title_pattern": "自动蒙皮4.*",
+        "vendor_pattern": "*天晴数码"
+      },
+      "open_menu": {
+        "ok": true,
+        "error": null,
+        "menu": "自动蒙皮",
+        "item": "GoSkinning"
+      },
+      "wait_open": {
+        "ok": true,
+        "exists": true,
+        "hwnd": 1907660,
+        "title": "自动蒙皮4.6.6 - 1803442430 - 天晴数码",
+        "match_count": 1,
+        "title_pattern": "自动蒙皮4.*",
+        "vendor_pattern": "*天晴数码"
+      },
+      "pre_ocr": {
+        "ok": true,
+        "ocr_texts": [
+          "自动蒙皮4.6.6 -1803442430 -天..",
+          "×",
+          "骨骼架设",
+          "蒙皮",
+          "后处理",
+          "配置",
+          "模型选择",
+          "wp_zsj_001_hd-skin_李燕国_2026.09.11_02015.max",
+          "2.36 MB",
+          "模型类型",
+          "人物",
+          "动物",
+          "其他",
+          "生成配置",
+          "算法模型",
+          "VISVISE-GoRigging-V2.0.0",
+          "生成方式",
+          "一键自动生成",
+          "模板骨骼适配",
+          "附加骨骼生成",
+          "Root骨骼",
+          "高级采样",
+          "Step1:",
+          "骨骼生成",
+          "控制器生成",
+          "生成控制器",
+          "Biped",
+          "Step2:",
+          "控制器生成",
+          "删除控制器",
+          "等待用户开始骨骼生成.."
+        ],
+        "error": null
+      },
+      "tab_蒙皮": {
+        "ok": true,
+        "matched": {
+          "text": "蒙皮",
+          "score": 0.999504566192627,
+          "box": [
+            [
+              87.0,
+              28.0
+            ],
+            [
+              117.0,
+              28.0
+            ],
+            [
+              117.0,
+              47.0
+            ],
+            [
+              87.0,
+              47.0
+            ]
+          ]
+        },
+        "screen_xy": [
+          832,
+          342
+        ],
+        "error": null
+      },
+      "tab_全局蒙皮": {
+        "ok": true,
+        "matched": {
+          "text": "全局蒙皮",
+          "score": 0.9998936653137207,
+          "box": [
+            [
+              12.0,
+              56.0
+            ],
+            [
+              67.0,
+              56.0
+            ],
+            [
+              67.0,
+              74.0
+            ],
+            [
+              12.0,
+              74.0
+            ]
+          ]
+        },
+        "screen_xy": [
+          770,
+          369
+        ],
+        "error": null
+      },
+      "verify": {
+        "ok": true,
+        "ocr_texts": [
+          "自动蒙皮4.6.6 -1803442430 - 天...",
+          "×",
+          "骨骼架设",
+          "蒙皮",
+          "后处理",
+          "配置",
+          "全局蒙皮",
+          "局部蒙皮",
+          "裙摆蒙皮",
+          "面部蒙皮",
+          "算法模型",
+          "general-v4.5",
+          "☑合并网格",
+          "全局蒙皮",
+          "(选中后在编辑区添加)",
+          "编辑区",
+          "在场景中选择模型",
+          "选定",
+          "删除",
+          "清空",
+          "在场景中选择关节",
+          "选定邦定骨骼删除",
+          "清空",
+          "开始蒙皮",
+          "修复飞点",
+          "等待用户开始蒙皮操作.."
+        ],
+        "error": null
+      }
+    },
+    "opened_via_menu": true,
+    "error": null
+  },
+  "skin": {
+    "ok": true,
+    "error": null,
+    "awaiting_start_confirm": true,
+    "confirmation": {
+      "need_user_confirm": true,
+      "action": "开始蒙皮",
+      "mesh_count": 1,
+      "joint_count": 26,
+      "mesh_names": [
+        "lg_gx_1_1"
+      ],
+      "bone_names": [
+        "Bone_GX01",
+        "Bone_GX07",
+        "Bone_GX09",
+        "Bone_GX11",
+        "Bone_GX13",
+        "Bone_GX15",
+        "Bone_GX17",
+        "Bone_GX23",
+        "Bone_GX25",
+        "Bone_GX27",
+        "Bone_GX29",
+        "Bone_GX34",
+        "Bone_GX36",
+        "Bone_GX38",
+        "Bone_GX40",
+        "Bone_GX42",
+        "Bone_GX46",
+        "Bone_GX48",
+        "Bone_GX54",
+        "Bone_GX56",
+        "Bone_GX58",
+        "Bone_GX60",
+        "Bone_GX62",
+        "Bone_GX64",
+        "Bone_GX66",
+        "Bone_GX68"
+      ],
+      "mesh_handles": [
+        267
+      ],
+      "bone_handles": [
+        361,
+        373,
+        370,
+        376,
+        436,
+        364,
+        367,
+        379,
+        382,
+        388,
+        385,
+        394,
+        397,
+        433,
+        391,
+        400,
+        406,
+        403,
+        427,
+        424,
+        430,
+        421,
+        418,
+        412,
+        415,
+        409
+      ],
+      "summary": "即将点击「开始蒙皮」，请确认以下信息：\n- 模型数量: 1\n- 模型(handles): 267\n- 关节/骨骼数量: 26\n- 关节/骨骼(handles): 361, 373, 370, 376, 436, 364, 367, 379, 382, 388, 385, 394, 397, 433, 391, 400, 406, 403, 427, 424, 430, 421, 418, 412, 415, 409\n确认后请调用 goskin_confirm_start(user_confirmed=true)。未确认不会点击「开始蒙皮」。",
+      "user_prompt": "即将点击「开始蒙皮」，请确认以下信息：\n- 模型数量: 1\n- 模型(handles): 267\n- 关节/骨骼数量: 26\n- 关节/骨骼(handles): 361, 373, 370, 376, 436, 364, 367, 379, 382, 388, 385, 394, 397, 433, 391, 400, 406, 403, 427, 424, 430, 421, 418, 412, 415, 409\n确认后请调用 goskin_confirm_start(user_confirmed=true)。未确认不会点击「开始蒙皮」。",
+      "prompt_zh": "即将点击「开始蒙皮」，请确认以下信息："
+    },
+    "user_prompt": "即将点击「开始蒙皮」，请确认以下信息：\n- 模型数量: 1\n- 模型(handles): 267\n- 关节/骨骼数量: 26\n- 关节/骨骼(handles): 361, 373, 370, 376, 436, 364, 367, 379, 382, 388, 385, 394, 397, 433, 391, 400, 406, 403, 427, 424, 430, 421, 418, 412, 415, 409\n确认后请调用 goskin_confirm_start(user_confirmed=true)。未确认不会点击「开始蒙皮」。",
+    "verify_mesh": {
+      "ok": true,
+      "counts": {
+        "mesh": 1,
+        "joints": 0
+      },
+      "ocr_texts": [
+        "自动蒙皮4.6.6 -1803442430 - 天...",
+        "×",
+        "骨骼架设",
+        "蒙皮",
+        "后处理",
+        "配置",
+        "全局蒙皮",
+        "局部蒙皮",
+        "裙摆蒙皮",
+        "面部蒙皮",
+        "算法模型",
+        "general-v4.5",
+        "☑合并网格",
+        "全局蒙皮",
+        "模型：1",
+        "关节：0",
+        "编辑区",
+        "在场景中选择模型",
+        "选定",
+        "删除",
+        "清空",
+        "Ig_gx_1_1",
+        "在场景中选择关节",
+        "选定邦定骨骼",
+        "删除",
+        "清空",
+        "开始蒙皮",
+        "修复飞点",
+        "等待用户开始蒙皮操作..."
+      ],
+      "error": null
+    },
+    "verify_bones": {
+      "ok": true,
+      "counts": {
+        "mesh": 1,
+        "joints": 26
+      },
+      "ocr_texts": [
+        "自动蒙皮4.6.6 -1803442430 - 天...",
+        "×",
+        "骨骼架设",
+        "蒙皮",
+        "后处理",
+        "配置",
+        "全局蒙皮",
+        "局部蒙皮",
+        "裙摆蒙皮",
+        "面部蒙皮",
+        "算法模型",
+        "general-v4.5",
+        "☑合并网格",
+        "全局蒙皮",
+        "模型：1",
+        "关节：26",
+        "编辑区",
+        "在场景中选择模型",
+        "选定",
+        "删除",
+        "清空",
+        "Ig_gx_1_1",
+        "在场景中选择关节",
+        "选定邦定骨骼删除",
+        "清空",
+        "Bone_GX01",
+        "Bone_GX07",
+        "Bone_GX09",
+        "Bone_GX11",
+        "Bone_GX13",
+        "Bone_GX15",
+        "Bone GX17",
+        "开始蒙皮",
+        "修复飞点",
+        "等待用户开始蒙皮操作..."
+      ],
+      "error": null
+    },
+    "select_mesh_scene": {
+      "ok": true,
+      "count": 1,
+      "handles": [
+        267
+      ],
+      "names": [
+        "lg_gx_1_1"
+      ],
+      "raw": "{\"ok\":true,\"count\":1,\"handles\":[267],\"names\":[\"lg_gx_1_1\"]}"
+    },
+    "select_bones_scene": {
+      "ok": true,
+      "count": 26,
+      "handles": [
+        361,
+        373,
+        370,
+        376,
+        436,
+        364,
+        367,
+        379,
+        382,
+        388,
+        385,
+        394,
+        397,
+        433,
+        391,
+        400,
+        406,
+        403,
+        427,
+        424,
+        430,
+        421,
+        418,
+        412,
+        415,
+        409
+      ],
+      "names": [
+        "Bone_GX01",
+        "Bone_GX07",
+        "Bone_GX09",
+        "Bone_GX11",
+        "Bone_GX13",
+        "Bone_GX15",
+        "Bone_GX17",
+        "Bone_GX23",
+        "Bone_GX25",
+        "Bone_GX27",
+        "Bone_GX29",
+        "Bone_GX34",
+        "Bone_GX36",
+        "Bone_GX38",
+        "Bone_GX40",
+        "Bone_GX42",
+        "Bone_GX46",
+        "Bone_GX48",
+        "Bone_GX54",
+        "Bone_GX56",
+        "Bone_GX58",
+        "Bone_GX60",
+        "Bone_GX62",
+        "Bone_GX64",
+        "Bone_GX66",
+        "Bone_GX68"
+      ],
+      "raw": "{\"ok\":true,\"count\":26,\"handles\":[361,373,370,376,436,364,367,379,382,388,385,394,397,433,391,400,406,403,427,424,430,421,418,412,415,409],\"names\":[\"Bone_GX01\",\"Bone_GX07\",\"Bone_GX09\",\"Bone_GX11\",\"Bone_GX13\",\"Bone_GX15\",\"Bone_GX17\",\"Bone_GX23\",\"Bone_GX25\",\"Bone_GX27\",\"Bone_GX29\",\"Bone_GX34\",\"Bone_GX36\",\"Bone_GX38\",\"Bone_GX40\",\"Bone_GX42\",\"Bone_GX46\",\"Bone_GX48\",\"Bone_GX54\",\"Bone_GX56\",\"Bone_GX58\",\"Bone_GX60\",\"Bone_GX62\",\"Bone_GX64\",\"Bone_GX66\",\"Bone_GX68\"]}"
+    }
+  }
+}

@@ -4,7 +4,12 @@ from ..server import client, mcp
 
 @mcp.tool()
 def list_max_instances() -> dict:
-    """List live Max instances in default order without selecting one."""
+    """List live Max instances via local native named pipes (no TCP ping).
+
+    Reads %LOCALAPPDATA%\\3dsmax-mcp\\instances\\*.json and probes each pipe
+    under the same process-wide serial lock as list_instances — never overlap
+    Max probes. Prefer list_instances for multi-host / TCP reachability.
+    """
     return client.list_max_instances()
 
 

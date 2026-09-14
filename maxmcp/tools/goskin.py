@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import Any, Optional
 
-from ..coerce import StrList
+from ..coerce import IntList, StrList
 from ..server import mcp, client
 from ..workspace_config import get_ocr_base
 
-_REPO_ROOT = __import__("pathlib").Path(__file__).resolve().parents[2]
-if (_REPO_ROOT / "dialog_monitor").is_dir() and str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+# Prefer the checkout's dialog_monitor over a stale site-packages snapshot
+# (force-include editable installs used to copy an incomplete tree there).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DM_DIR = _REPO_ROOT / "dialog_monitor"
+if _DM_DIR.is_dir() and (_DM_DIR / "goskin_flow.py").is_file():
+    root = str(_REPO_ROOT)
+    while root in sys.path:
+        sys.path.remove(root)
+    sys.path.insert(0, root)
+    for key in list(sys.modules):
+        if key == "dialog_monitor" or key.startswith("dialog_monitor."):
+            del sys.modules[key]
 
 from dialog_monitor.goskin_flow import (  # noqa: E402
     cleanup_goskin_lists as _cleanup_goskin_lists,
@@ -91,6 +101,8 @@ def goskin_cleanup_lists(
 def goskin_run_skin(
     mesh_names: Optional[StrList] = None,
     bone_names: Optional[StrList] = None,
+    mesh_handles: Optional[IntList] = None,
+    bone_handles: Optional[IntList] = None,
     complete_timeout_s: float = 180.0,
     click_start: bool = False,
     require_counts: bool = True,
@@ -100,6 +112,7 @@ def goskin_run_skin(
 ) -> dict[str, Any]:
     """Prepare GoSkin lists (cleanup→选定 mesh/bones) then PAUSE for user confirm.
 
+    Prefer ``mesh_handles`` / ``bone_handles`` from ``get_unhidden_meshes_bones``.
     Default click_start=false: returns confirmation summary (mesh/joint names &
     counts) and does NOT click 「开始蒙皮」. After the user agrees, call
     goskin_confirm_start(user_confirmed=true).
@@ -108,6 +121,8 @@ def goskin_run_skin(
         client,
         mesh_names=list(mesh_names) if mesh_names else None,
         bone_names=list(bone_names) if bone_names else None,
+        mesh_handles=list(mesh_handles) if mesh_handles else None,
+        bone_handles=list(bone_handles) if bone_handles else None,
         complete_timeout_s=float(complete_timeout_s),
         click_start=bool(click_start),
         require_counts=bool(require_counts),
@@ -142,6 +157,8 @@ def goskin_confirm_start(
 def goskin_run_auto(
     mesh_names: Optional[StrList] = None,
     bone_names: Optional[StrList] = None,
+    mesh_handles: Optional[IntList] = None,
+    bone_handles: Optional[IntList] = None,
     menu: str = "自动蒙皮",
     item: str = "GoSkinning",
     open_wait_s: float = 8.0,
@@ -156,6 +173,8 @@ def goskin_run_auto(
         client,
         mesh_names=list(mesh_names) if mesh_names else None,
         bone_names=list(bone_names) if bone_names else None,
+        mesh_handles=list(mesh_handles) if mesh_handles else None,
+        bone_handles=list(bone_handles) if bone_handles else None,
         menu=(menu or "自动蒙皮").strip(),
         item=(item or "GoSkinning").strip(),
         open_wait_s=float(open_wait_s),

@@ -12,8 +12,10 @@ SKILL_SRC = SKILL_DIR / "SKILL.md"
 PROCEDURAL_GRAPHS_REF = SKILL_DIR / "procedural-graphs.md"
 SKILL_OUT = ROOT / "3dsmax-mcp-dev.skill"
 LOCAL_AGENTS_DIR = ROOT / ".agents" / "skills" / "3dsmax-mcp-dev"
+LOCAL_CURSOR_DIR = ROOT / ".cursor" / "skills" / "3dsmax-mcp-dev"
 GLOBAL_SKILLS_DIR = Path.home() / ".claude" / "skills" / "3dsmax-mcp-dev"
 GLOBAL_AGENTS_DIR = Path.home() / ".agents" / "skills" / "3dsmax-mcp-dev"
+GLOBAL_CURSOR_DIR = Path.home() / ".cursor" / "skills" / "3dsmax-mcp-dev"
 def collect_skill_files():
     """Collect the core skill and its bundled reference files."""
     files = [SKILL_SRC, PROCEDURAL_GRAPHS_REF]
@@ -46,9 +48,11 @@ def build(target="both"):
 
     # 2. Select install targets
     local_dests = [
+        (".cursor/skills", LOCAL_CURSOR_DIR),
         (".agents/skills", LOCAL_AGENTS_DIR),
     ]
     global_dests = [
+        ("~/.cursor/skills", GLOBAL_CURSOR_DIR),
         ("~/.claude/skills", GLOBAL_SKILLS_DIR),
         ("~/.agents/skills", GLOBAL_AGENTS_DIR),
     ]

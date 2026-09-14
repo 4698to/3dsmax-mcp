@@ -247,7 +247,10 @@ and existing procedural skies use the provider's dome or environment binding.
 | `manage_layers` | Create, delete, list, and configure layers; move/select objects |
 | `manage_groups` | Create, ungroup, open, close, attach, detach groups |
 | `manage_selection_sets` | Named selection sets |
-| `manage_scene` | Hold, fetch, reset, save, scene info |
+| `manage_scene` | Hold, fetch, reset, save, scene info, save older-version copy |
+| `load_scene` | Load a `.max` file (`MCP_SceneManage.loadScene`) |
+| `get_unhidden_meshes_bones` | Unhidden editable meshes and bones with AnimHandles |
+| `select_by_handles` | Select nodes by AnimHandle |
 | `undo_last` | Undo the last 3ds Max scene operation |
 
 ### Viewport & render

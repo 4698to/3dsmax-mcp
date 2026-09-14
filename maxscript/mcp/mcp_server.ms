@@ -871,7 +871,7 @@ struct MCPUIStruct
 		if this.statusLabel == undefined or this.startButton == undefined or this.stopButton == undefined then return()
 		if MCP_Server != undefined and MCP_Server.isRunning then
 		(
-			this.statusLabel.Text = "状态: 运行中   " + MCP_Server.bindIP + ":" + (MCP_Server.port as string)
+			this.statusLabel.Text = "状态 / Status: 运行中 / Running   " + MCP_Server.bindIP + ":" + (MCP_Server.port as string)
 			this.startButton.Enabled = false
 			this.stopButton.Enabled = true
 			this.transportCombo.Enabled = false
@@ -881,13 +881,14 @@ struct MCPUIStruct
 		)
 		else
 		(
-			this.statusLabel.Text = "状态: 已停止"
+			this.statusLabel.Text = "状态 / Status: 已停止 / Stopped"
 			this.startButton.Enabled = true
 			this.stopButton.Enabled = false
-			this.transportCombo.Enabled = true
 			this.modeCombo.Enabled = true
 			this.ipTextBox.Enabled = true
 			this.portTextBox.Enabled = true
+			-- 远程必须 TCP; 仅本地可选 Auto / TCP / Native
+			this.applyModeTransportRules()
 		)
 		this.updateHint()
 	),
@@ -896,17 +897,38 @@ struct MCPUIStruct
 	fn updateHint =
 	(
 		if this.hintLabel == undefined then return()
-		if MCP_Server != undefined and MCP_Server.isRunning and this.modeCombo.SelectedIndex == 1 then
+		local remote = this.modeCombo != undefined and this.modeCombo.SelectedIndex == 1
+		if MCP_Server != undefined and MCP_Server.isRunning and remote then
 		(
 			local ips = this.getLocalIPv4()
 			local ipStr = if ips.count > 0 then ips[1] else this.ipTextBox.Text
-			this.hintLabel.Text = "Python 端配置: MAXMCP_INSTANCES=" + ipStr + ":" + (MCP_Server.port as string)
+			this.hintLabel.Text = "Python 配置 / Config: MAXMCP_INSTANCES=" + ipStr + ":" + (MCP_Server.port as string)
 		)
+		else if remote then
+			this.hintLabel.Text = "远程模式强制 TCP / Remote requires TCP (LAN cannot use Native pipe)"
 		else
 			this.hintLabel.Text = ""
 	),
 
-	-- 模式切换: 本地 127.0.0.1 / 远程 0.0.0.0 (可自定义)
+	-- 远程 → 锁定 TCP; 本地 → 开放传输方式多选
+	fn applyModeTransportRules =
+	(
+		if this.transportCombo == undefined or this.modeCombo == undefined then return()
+		local remote = this.modeCombo.SelectedIndex == 1
+		if remote then
+		(
+			this.transportCombo.SelectedIndex = 1  -- 仅 TCP / TCP only
+			this.transportCombo.Enabled = false
+		)
+		else
+		(
+			-- 服务未运行时才允许改传输方式
+			local running = MCP_Server != undefined and MCP_Server.isRunning
+			this.transportCombo.Enabled = not running
+		)
+	),
+
+	-- 模式切换: 本地 127.0.0.1 / 远程 0.0.0.0 (可自定义); 远程强制 TCP
 	fn onModeChanged sender args =
 	(
 		if this.settingMode then return()
@@ -921,6 +943,7 @@ struct MCPUIStruct
 			this.ipTextBox.Text = "127.0.0.1"
 			this.ipTextBox.ReadOnly = true
 		)
+		this.applyModeTransportRules()
 		this.settingMode = false
 		this.updateHint()
 	),
@@ -931,12 +954,16 @@ struct MCPUIStruct
 		try (MCP_Server.bindIP = this.ipTextBox.Text) catch ()
 		try (MCP_Server.port = (this.portTextBox.Text as integer)) catch (MCP_Server.port = 8765)
 		MCP_Server.safeMode = this.safeCheckBox.Checked
-		MCP_Server.transport = case this.transportCombo.SelectedIndex of
-		(
-			1: #tcp
-			2: #native
-			default: #auto
-		)
+		-- 远程模式必须监听 TCP (Native named pipe 无法跨机)
+		if this.modeCombo.SelectedIndex == 1 then
+			MCP_Server.transport = #tcp
+		else
+			MCP_Server.transport = case this.transportCombo.SelectedIndex of
+			(
+				1: #tcp
+				2: #native
+				default: #auto
+			)
 		local result = #failed
 		try
 		(
@@ -952,7 +979,7 @@ struct MCPUIStruct
 			(
 				-- 仅 Native Bridge: 不监听 TCP, 给出可见反馈而非看起来"没反应";
 				-- 保持"启动"可用, 便于改传输方式后再次启动
-				this.statusLabel.Text = "状态: 已启动 (Native Bridge, 未监听 TCP)"
+				this.statusLabel.Text = "状态 / Status: Native Bridge (未监听 TCP / no TCP)"
 				this.startButton.Enabled = true
 				this.stopButton.Enabled = false
 			)
@@ -1022,57 +1049,60 @@ struct MCPUIStruct
 		try
 		(
 			local font = dotNetObject "System.Drawing.Font" "Microsoft YaHei" 9.0
+			local labelW = 140
+			local fieldX = 156
+			local fieldW = 260
 
 			this.form = dotNetObject "System.Windows.Forms.Form"
 			this.form.Text = "3ds Max MCP Server"
-			this.form.ClientSize = dotNetObject "System.Drawing.Size" 360 360
+			this.form.ClientSize = dotNetObject "System.Drawing.Size" 430 380
 			this.form.FormBorderStyle = (dotNetClass "System.Windows.Forms.FormBorderStyle").FixedSingle
 			this.form.MaximizeBox = false
-			this.form.MinimizeBox = false
+			this.form.MinimizeBox = true
 			this.form.StartPosition = (dotNetClass "System.Windows.Forms.FormStartPosition").CenterScreen
 			this.form.Font = font
 
 			-- 传输方式
 			local lblTransport = dotNetObject "System.Windows.Forms.Label"
-			lblTransport.Text = "传输方式:"
+			lblTransport.Text = "传输方式 / Transport:"
 			lblTransport.Location = dotNetObject "System.Drawing.Point" 12 16
-			lblTransport.Size = dotNetObject "System.Drawing.Size" 70 20
+			lblTransport.Size = dotNetObject "System.Drawing.Size" labelW 20
 			this.form.Controls.Add lblTransport
 
 			this.transportCombo = dotNetObject "System.Windows.Forms.ComboBox"
-			this.transportCombo.Location = dotNetObject "System.Drawing.Point" 88 13
-			this.transportCombo.Size = dotNetObject "System.Drawing.Size" 260 24
+			this.transportCombo.Location = dotNetObject "System.Drawing.Point" fieldX 13
+			this.transportCombo.Size = dotNetObject "System.Drawing.Size" fieldW 24
 			this.transportCombo.DropDownStyle = (dotNetClass "System.Windows.Forms.ComboBoxStyle").DropDownList
-			this.transportCombo.Items.Add "自动 (Native 优先)"
-			this.transportCombo.Items.Add "仅 TCP (强制 TCP)"
-			this.transportCombo.Items.Add "仅 Native Bridge (禁用 TCP)"
+			this.transportCombo.Items.Add "自动 / Auto (Native first)"
+			this.transportCombo.Items.Add "仅 TCP / TCP only"
+			this.transportCombo.Items.Add "仅 Native / Native only (no TCP)"
 			this.form.Controls.Add this.transportCombo
 
 			-- 运行模式
 			local lblMode = dotNetObject "System.Windows.Forms.Label"
-			lblMode.Text = "运行模式:"
+			lblMode.Text = "运行模式 / Mode:"
 			lblMode.Location = dotNetObject "System.Drawing.Point" 12 50
-			lblMode.Size = dotNetObject "System.Drawing.Size" 70 20
+			lblMode.Size = dotNetObject "System.Drawing.Size" labelW 20
 			this.form.Controls.Add lblMode
 
 			this.modeCombo = dotNetObject "System.Windows.Forms.ComboBox"
-			this.modeCombo.Location = dotNetObject "System.Drawing.Point" 88 47
-			this.modeCombo.Size = dotNetObject "System.Drawing.Size" 260 24
+			this.modeCombo.Location = dotNetObject "System.Drawing.Point" fieldX 47
+			this.modeCombo.Size = dotNetObject "System.Drawing.Size" fieldW 24
 			this.modeCombo.DropDownStyle = (dotNetClass "System.Windows.Forms.ComboBoxStyle").DropDownList
-			this.modeCombo.Items.Add "本地模式 (仅本机)"
-			this.modeCombo.Items.Add "远程模式 (局域网)"
+			this.modeCombo.Items.Add "本地 / Local (this PC)"
+			this.modeCombo.Items.Add "远程 / Remote (LAN, TCP only)"
 			this.form.Controls.Add this.modeCombo
 
 			-- 绑定 IP
 			local lblIp = dotNetObject "System.Windows.Forms.Label"
-			lblIp.Text = "绑定 IP:"
+			lblIp.Text = "绑定 IP / Bind IP:"
 			lblIp.Location = dotNetObject "System.Drawing.Point" 12 84
-			lblIp.Size = dotNetObject "System.Drawing.Size" 70 20
+			lblIp.Size = dotNetObject "System.Drawing.Size" labelW 20
 			this.form.Controls.Add lblIp
 
 			this.ipTextBox = dotNetObject "System.Windows.Forms.TextBox"
-			this.ipTextBox.Location = dotNetObject "System.Drawing.Point" 88 81
-			this.ipTextBox.Size = dotNetObject "System.Drawing.Size" 260 24
+			this.ipTextBox.Location = dotNetObject "System.Drawing.Point" fieldX 81
+			this.ipTextBox.Size = dotNetObject "System.Drawing.Size" fieldW 24
 			this.ipTextBox.Text = "127.0.0.1"
 			this.ipTextBox.ReadOnly = true
 			this.form.Controls.Add this.ipTextBox
@@ -1080,13 +1110,13 @@ struct MCPUIStruct
 
 			-- 端口
 			local lblPort = dotNetObject "System.Windows.Forms.Label"
-			lblPort.Text = "端口:"
+			lblPort.Text = "端口 / Port:"
 			lblPort.Location = dotNetObject "System.Drawing.Point" 12 118
-			lblPort.Size = dotNetObject "System.Drawing.Size" 70 20
+			lblPort.Size = dotNetObject "System.Drawing.Size" labelW 20
 			this.form.Controls.Add lblPort
 
 			this.portTextBox = dotNetObject "System.Windows.Forms.TextBox"
-			this.portTextBox.Location = dotNetObject "System.Drawing.Point" 88 115
+			this.portTextBox.Location = dotNetObject "System.Drawing.Point" fieldX 115
 			this.portTextBox.Size = dotNetObject "System.Drawing.Size" 120 24
 			this.portTextBox.Text = "8765"
 			this.form.Controls.Add this.portTextBox
@@ -1094,67 +1124,67 @@ struct MCPUIStruct
 
 			-- 安全模式
 			this.safeCheckBox = dotNetObject "System.Windows.Forms.CheckBox"
-			this.safeCheckBox.Text = "安全模式 (拦截危险命令)"
+			this.safeCheckBox.Text = "安全模式 / Safe mode (block dangerous cmds)"
 			this.safeCheckBox.Location = dotNetObject "System.Drawing.Point" 12 152
-			this.safeCheckBox.Size = dotNetObject "System.Drawing.Size" 336 22
+			this.safeCheckBox.Size = dotNetObject "System.Drawing.Size" 404 22
 			this.safeCheckBox.Checked = true
 			this.form.Controls.Add this.safeCheckBox
 
 			-- 本机 IP 参考
 			local localIps = this.getLocalIPv4()
-			local ipStr = "无"
+			local ipStr = "无 / none"
 			if localIps.count > 0 do
 			(
 				ipStr = localIps[1]
 				for i = 2 to localIps.count do ipStr = ipStr + ", " + localIps[i]
 			)
 			this.localIpLabel = dotNetObject "System.Windows.Forms.Label"
-			this.localIpLabel.Text = "本机 IP: " + ipStr
+			this.localIpLabel.Text = "本机 IP / Local IP: " + ipStr
 			this.localIpLabel.Location = dotNetObject "System.Drawing.Point" 12 182
-			this.localIpLabel.Size = dotNetObject "System.Drawing.Size" 336 20
+			this.localIpLabel.Size = dotNetObject "System.Drawing.Size" 404 20
 			this.form.Controls.Add this.localIpLabel
 
 			-- 分隔线
 			local sep = dotNetObject "System.Windows.Forms.Label"
 			sep.Text = "-------------------------------------------"
 			sep.Location = dotNetObject "System.Drawing.Point" 12 208
-			sep.Size = dotNetObject "System.Drawing.Size" 336 18
+			sep.Size = dotNetObject "System.Drawing.Size" 404 18
 			this.form.Controls.Add sep
 
 			-- 状态
 			this.statusLabel = dotNetObject "System.Windows.Forms.Label"
-			this.statusLabel.Text = "状态: 已停止"
+			this.statusLabel.Text = "状态 / Status: 已停止 / Stopped"
 			this.statusLabel.Location = dotNetObject "System.Drawing.Point" 12 230
-			this.statusLabel.Size = dotNetObject "System.Drawing.Size" 336 22
+			this.statusLabel.Size = dotNetObject "System.Drawing.Size" 404 22
 			this.form.Controls.Add this.statusLabel
 
 			-- 启动 / 停止
 			this.startButton = dotNetObject "System.Windows.Forms.Button"
-			this.startButton.Text = "启动服务"
+			this.startButton.Text = "启动服务 / Start"
 			this.startButton.Location = dotNetObject "System.Drawing.Point" 12 258
-			this.startButton.Size = dotNetObject "System.Drawing.Size" 160 30
+			this.startButton.Size = dotNetObject "System.Drawing.Size" 196 30
 			this.form.Controls.Add this.startButton
 
 			this.stopButton = dotNetObject "System.Windows.Forms.Button"
-			this.stopButton.Text = "停止服务"
-			this.stopButton.Location = dotNetObject "System.Drawing.Point" 188 258
-			this.stopButton.Size = dotNetObject "System.Drawing.Size" 160 30
+			this.stopButton.Text = "停止服务 / Stop"
+			this.stopButton.Location = dotNetObject "System.Drawing.Point" 222 258
+			this.stopButton.Size = dotNetObject "System.Drawing.Size" 196 30
 			this.stopButton.Enabled = false
 			this.form.Controls.Add this.stopButton
 
 			-- 关闭行为
 			this.closeStopCheckBox = dotNetObject "System.Windows.Forms.CheckBox"
-			this.closeStopCheckBox.Text = "关闭窗口时停止服务"
-			this.closeStopCheckBox.Location = dotNetObject "System.Drawing.Point" 12 296
-			this.closeStopCheckBox.Size = dotNetObject "System.Drawing.Size" 336 22
+			this.closeStopCheckBox.Text = "关闭窗口时停止服务 / Stop service on close"
+			this.closeStopCheckBox.Location = dotNetObject "System.Drawing.Point" 12 300
+			this.closeStopCheckBox.Size = dotNetObject "System.Drawing.Size" 404 22
 			this.closeStopCheckBox.Checked = true
 			this.form.Controls.Add this.closeStopCheckBox
 
 			-- 远程模式提示
 			this.hintLabel = dotNetObject "System.Windows.Forms.Label"
 			this.hintLabel.Text = ""
-			this.hintLabel.Location = dotNetObject "System.Drawing.Point" 12 326
-			this.hintLabel.Size = dotNetObject "System.Drawing.Size" 336 22
+			this.hintLabel.Location = dotNetObject "System.Drawing.Point" 12 330
+			this.hintLabel.Size = dotNetObject "System.Drawing.Size" 404 36
 			this.form.Controls.Add this.hintLabel
 
 			-- 事件: 经全局派发函数中转, 避免 struct 方法直接作为 .NET 事件处理器
@@ -1172,6 +1202,8 @@ struct MCPUIStruct
 				default: 0
 			)
 			this.modeCombo.SelectedIndex = 0
+			this.applyModeTransportRules()
+			this.updateHint()
 		)
 		catch
 		(

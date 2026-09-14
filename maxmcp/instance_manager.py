@@ -48,12 +48,11 @@ import os
 import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from .max_client import MaxClient
+from .max_client import MaxClient, PROBE_SERIAL, _probe_named_pipe_unlocked
 
 ENV_INSTANCES = "MAXMCP_INSTANCES"
 ENV_INSTANCES_FILE = "MAXMCP_INSTANCES_FILE"
@@ -67,7 +66,8 @@ REGISTRY_HEARTBEAT_SECONDS = 30  # how often 3ds Max refreshes its entry
 REGISTRY_TTL = 90  # seconds; an entry not refreshed within this is gone
 REGISTRY_POLL_SECONDS = 5  # background poll interval for the registry file
 INSTANCES_INI_NAME = "max_instances.ini"
-PROBE_TIMEOUT = float(os.environ.get("MAXMCP_PROBE_TIMEOUT", "2.5"))
+# Must exceed Max idle poll (~1.5s) plus response write time on Max 2015.
+PROBE_TIMEOUT = float(os.environ.get("MAXMCP_PROBE_TIMEOUT", "5.0"))
 PROBE_CACHE_SECONDS = float(os.environ.get("MAXMCP_PROBE_CACHE", "5"))
 # Background watcher probe cadence (list_instances still uses PROBE_CACHE_SECONDS).
 PROBE_BACKGROUND_SECONDS = float(os.environ.get("MAXMCP_PROBE_BACKGROUND", "30"))
@@ -114,7 +114,11 @@ class IMaxInstance:
     locked_by: Optional[object] = None  # MCP ServerSession currently holding it
     locked_at: Optional[float] = None  # time.monotonic() of acquisition
     pinned: bool = False  # from env/ini; kept even when not in local registry
-    online: Optional[bool] = None  # TCP reachability; None = not probed yet
+    pid: Optional[int] = None
+    pipe: Optional[str] = None
+    online: Optional[bool] = None  # reachable via TCP and/or native
+    tcp_online: Optional[bool] = None
+    native_online: Optional[bool] = None
     online_error: Optional[str] = None
     online_checked_at: Optional[float] = None  # time.monotonic()
 
@@ -165,6 +169,14 @@ def _probe_tcp(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> tuple[bo
             return False, f"unexpected response: {text[:120]}"
     except OSError as exc:
         return False, str(exc)
+
+
+def _is_local_host(host: str) -> bool:
+    return (host or "").strip().lower() in ("127.0.0.1", "localhost", "::1", "")
+
+
+def _pipe_name_for_pid(pid: int) -> str:
+    return fr"\\.\pipe\3dsmax-mcp-pid-{int(pid)}"
 
 
 def _env_lock_ttl() -> float:
@@ -331,6 +343,7 @@ class InstanceManager:
                 )
             )
             self._clients[name] = MaxClient(host=host, port=port)
+        self._attach_registry_identity_locked()
         logging.info(
             "InstanceManager loaded %d 3ds Max instance(s): %s",
             len(self._instances),
@@ -456,6 +469,7 @@ class InstanceManager:
             self._clients.pop(old.name, None)
 
         self._instances = new_instances
+        self._attach_registry_identity_locked()
         # Single instance (pinned or discovered) can auto-bind; multiple need acquire.
         self._auto_bind = len(self._instances) == 1
 
@@ -572,6 +586,31 @@ class InstanceManager:
             host = self._connect_host_from_registry(rec)
             found.append((host, port, name, ver if isinstance(ver, int) else None))
         return found
+
+    def _attach_registry_identity_locked(self) -> None:
+        """Copy pid/pipe from the local heartbeat registry onto matching instances.
+
+        Named pipes only exist on the Max host; remote TCP entries stay pid-less.
+        Caller holds self._lock.
+        """
+        for rec in self._read_registry_records():
+            rec_port = rec.get("port")
+            rec_pid = rec.get("pid")
+            if not isinstance(rec_port, int) or not isinstance(rec_pid, int) or rec_pid <= 0:
+                continue
+            rec_host = self._connect_host_from_registry(rec)
+            rec_pipe = rec.get("pipe")
+            pipe = rec_pipe if isinstance(rec_pipe, str) and rec_pipe else _pipe_name_for_pid(rec_pid)
+            for inst in self._instances:
+                if inst.port != rec_port:
+                    continue
+                same = inst.host == rec_host or (
+                    _is_local_host(inst.host) and _is_local_host(rec_host)
+                )
+                if not same:
+                    continue
+                inst.pid = rec_pid
+                inst.pipe = pipe
 
     def refresh_registry(self) -> None:
         """Re-sync non-pinned instances from the auto-discovery registry file.
@@ -884,62 +923,65 @@ class InstanceManager:
     # ------------------------------------------------------------------ #
 
     def probe_all(self, *, force: bool = False) -> None:
-        """TCP-probe every managed instance; update online / online_error.
+        """Probe TCP and native sequentially, one Max at a time.
 
-        Probes run in parallel. Results younger than PROBE_CACHE_SECONDS are
-        reused unless force=True (background watcher uses force).
+        3ds Max is single-threaded and cannot answer overlapping requests.
+        Uses process-wide ``PROBE_SERIAL`` shared with ``list_max_instances``
+        so TCP pings and named-pipe checks never overlap. Native is an OS
+        existence check; TCP is a one-line protocol ping. Remote hosts skip
+        native (pipes are local to the Max machine).
         """
-        with self._lock:
-            now = time.monotonic()
-            targets = [
-                (inst.name, inst.host, inst.port)
-                for inst in self._instances
-                if force
-                or inst.online_checked_at is None
-                or (now - inst.online_checked_at) >= PROBE_CACHE_SECONDS
-            ]
-        if not targets:
-            return
+        with PROBE_SERIAL:
+            with self._lock:
+                now = time.monotonic()
+                targets = [
+                    (inst.name, inst.host, inst.port, inst.pid, inst.pipe)
+                    for inst in self._instances
+                    if force
+                    or inst.online_checked_at is None
+                    or (now - inst.online_checked_at) >= PROBE_CACHE_SECONDS
+                ]
+            if not targets:
+                return
 
-        results: dict[str, tuple[bool, str]] = {}
-        workers = min(8, max(1, len(targets)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(_probe_tcp, host, port): name
-                for name, host, port in targets
-            }
-            for fut in as_completed(futures):
-                name = futures[fut]
-                try:
-                    results[name] = fut.result()
-                except Exception as exc:  # noqa: BLE001 — surface as offline
-                    results[name] = (False, str(exc))
+            results: dict[str, tuple[Optional[bool], Optional[bool], str]] = {}
+            for name, host, port, pid, pipe in targets:
+                native_online: Optional[bool] = None
+                native_pipe = pipe or (_pipe_name_for_pid(pid) if pid else None)
+                if native_pipe and _is_local_host(host):
+                    native_online = _probe_named_pipe_unlocked(native_pipe)
+                tcp_online, err = _probe_tcp(host, port)
+                results[name] = (tcp_online, native_online, err)
 
-        with self._lock:
-            checked_at = time.monotonic()
-            for inst in self._instances:
-                if inst.name not in results:
-                    continue
-                online, err = results[inst.name]
-                prev = inst.online
-                inst.online = online
-                inst.online_error = err or None
-                inst.online_checked_at = checked_at
-                if prev is True and online is False:
-                    logging.warning(
-                        "Instance %s (%s:%s) went offline: %s",
-                        inst.name,
-                        inst.host,
-                        inst.port,
-                        err or "unreachable",
-                    )
-                elif prev is not True and online is True:
-                    logging.info(
-                        "Instance %s (%s:%s) is online",
-                        inst.name,
-                        inst.host,
-                        inst.port,
-                    )
+            with self._lock:
+                checked_at = time.monotonic()
+                for inst in self._instances:
+                    if inst.name not in results:
+                        continue
+                    tcp_online, native_online, err = results[inst.name]
+                    prev = inst.online
+                    inst.tcp_online = tcp_online
+                    inst.native_online = native_online
+                    inst.online = bool(tcp_online) or bool(native_online)
+                    inst.online_error = None if inst.online else (err or None)
+                    inst.online_checked_at = checked_at
+                    if prev is True and inst.online is False:
+                        logging.warning(
+                            "Instance %s (%s:%s) went offline: %s",
+                            inst.name,
+                            inst.host,
+                            inst.port,
+                            err or "unreachable",
+                        )
+                    elif prev is not True and inst.online is True:
+                        logging.info(
+                            "Instance %s (%s:%s) is online tcp=%s native=%s",
+                            inst.name,
+                            inst.host,
+                            inst.port,
+                            tcp_online,
+                            native_online,
+                        )
 
     # ------------------------------------------------------------------ #
     # Introspection
@@ -959,14 +1001,24 @@ class InstanceManager:
                     if inst.online_checked_at is not None
                     else None
                 )
+                transports = []
+                if inst.tcp_online:
+                    transports.append("tcp")
+                if inst.native_online:
+                    transports.append("native")
                 out.append(
                     {
                         "name": inst.name,
                         "host": inst.host,
                         "port": inst.port,
+                        "pid": inst.pid,
+                        "pipe": inst.pipe,
                         "max_version": inst.max_version,
                         "pinned": inst.pinned,
                         "online": inst.online,
+                        "tcp_online": inst.tcp_online,
+                        "native_online": inst.native_online,
+                        "transports": transports,
                         "online_error": inst.online_error,
                         "checked_ago_seconds": checked_ago,
                         "busy": inst.locked_by is not None,
@@ -991,9 +1043,13 @@ class InstanceManager:
                     "name": inst.name,
                     "host": inst.host,
                     "port": inst.port,
+                    "pid": inst.pid,
+                    "pipe": inst.pipe,
                     "max_version": inst.max_version,
                     "pinned": inst.pinned if inst else None,
                     "online": inst.online if inst else None,
+                    "tcp_online": inst.tcp_online if inst else None,
+                    "native_online": inst.native_online if inst else None,
                     "acquired_for_seconds": (
                         round(time.monotonic() - inst.locked_at, 1) if inst.locked_at else 0.0
                     ),

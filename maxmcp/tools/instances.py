@@ -26,10 +26,12 @@ from ..server import mcp
 def list_instances() -> str:
     """List all configured 3ds Max instances and their busy/online state.
 
-    Shows each instance's name, host, port, whether it is pinned (from
-    MAXMCP_INSTANCES / max_instances.ini), TCP reachability (`online`),
-    whether it is held by a user (`busy`), and for how long. Use this before
-    acquire_instance. `online=false` means the listener port is not reachable.
+    Shows each instance's name, host, port, pid/pipe when known, TCP
+    (`tcp_online`) and native-pipe (`native_online`) reachability, whether it
+    is pinned, held (`busy`), and for how long. ``online`` is true if either
+    transport answered. Probes are process-wide serial (one Max at a time;
+    never overlap with list_max_instances). Use this before acquire_instance.
+    Remote hosts only get a TCP ping; named pipes are local to the Max machine.
     """
     return json.dumps({"instances": manager.list_instances()}, ensure_ascii=False)
 
@@ -38,10 +40,11 @@ def list_instances() -> str:
 def acquire_instance(ctx: Context, name: Optional[str] = None) -> str:
     """Explicitly acquire (lock) a 3ds Max instance for the current user.
 
-    Each instance accepts only one user at a time. Call this before using any
-    scene tool so commands are routed to your own instance. If no name is
-    given, the first idle instance is chosen automatically. Calling it again
-    while already holding an instance keeps your current one.
+    Session lock only — does not ping Max. Relies on online flags from a prior
+    list_instances. Each instance accepts only one user at a time. Call this
+    before using any scene tool so commands are routed to your own instance.
+    If no name is given, the first idle online instance is chosen. Calling it
+    again while already holding an instance keeps your current one.
 
     Args:
         name: Optional instance name from list_instances to acquire. When

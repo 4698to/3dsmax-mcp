@@ -1,0 +1,58 @@
+flowchart TB
+  subgraph Clients["MCP 客户端"]
+    Cursor["Cursor / Claude / HTTP 代理"]
+  end
+
+  subgraph PyHost["Python 主机 · maxmcp"]
+    FastMCP["FastMCP 服务端<br/>stdio：标准输入输出<br/>或 HTTP：0.0.0.0:8000/mcp"]
+    InstMgr["实例管理器 InstanceManager<br/>列表 / 抢占 / 释放"]
+    MaxClient["Max 客户端 MaxClient<br/>PROBE_SERIAL 串行探活"]
+    Tools["工具层 Tools<br/>场景 · GoSkin · 视口 · …"]
+    FastMCP --> InstMgr
+    FastMCP --> Tools
+    Tools --> MaxClient
+    InstMgr --> MaxClient
+  end
+
+  subgraph Config["配置与发现"]
+    INI["max_instances.ini<br/>固定实例 host:端口"]
+    REG["instances.jsonl<br/>本机心跳注册"]
+    WS["共享工作区 Workspace<br/>UNC / 盘符路径"]
+    OCR["OCR 识别服务<br/>http://…:8000/v1/ocr"]
+  end
+
+  Cursor -->|"stdio 或<br/>HTTP MCP"| FastMCP
+  InstMgr -.-> INI
+  InstMgr -.-> REG
+  Tools -.-> WS
+  Tools -.-> OCR
+
+  subgraph LocalMax["本机 3ds Max · 本地模式"]
+    MaxL["3ds Max 进程"]
+    PanelL["MCP 控制面板<br/>绑定 127.0.0.1"]
+    Native["原生桥 Native Bridge<br/>\\\\.\\pipe\\3dsmax-mcp-pid-N"]
+    TCPL["TCP 监听<br/>127.0.0.1:8765"]
+    MS_L["MAXScript<br/>场景管理 · 对话框监视"]
+    MaxL --- PanelL
+    MaxL --- Native
+    MaxL --- TCPL
+    MaxL --- MS_L
+  end
+
+  subgraph RemoteMax["远程 3ds Max · 远程模式 · 强制 TCP"]
+    MaxR["3ds Max @ 局域网 IP"]
+    PanelR["MCP 控制面板<br/>绑定 0.0.0.0"]
+    TCPR["TCP 监听<br/>0.0.0.0:8765"]
+    MS_R["MAXScript<br/>场景管理 · 对话框监视"]
+    MaxR --- PanelR
+    MaxR --- TCPR
+    MaxR --- MS_R
+  end
+
+  MaxClient -->|"命名管道<br/>仅本机可达"| Native
+  MaxClient -->|"TCP 探活 / 命令<br/>JSON + 换行"| TCPL
+  MaxClient -->|"TCP :8765<br/>跨机通信"| TCPR
+
+  MaxL -.->|"截图 / 上传文件"| WS
+  MaxR -.->|"截图 / 上传文件"| WS
+  Tools -->|"HTTP 文字识别"| OCR

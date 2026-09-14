@@ -12,6 +12,7 @@ Proven UI sequence (global skin):
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from typing import Any, Sequence
@@ -329,13 +330,76 @@ def _select_objects_via_max(
     return {"ok": True, "count": count, "names": list(names), "raw": raw}
 
 
+def _select_objects_by_handles(
+    client: Any,
+    handles: Sequence[int] | None,
+) -> dict[str, Any]:
+    """Select scene nodes via MCP_SceneManage.selectByHandles (AnimHandle)."""
+    if not handles:
+        return {
+            "ok": True,
+            "skipped": True,
+            "handles": [],
+            "count": _selection_count(client),
+        }
+    ints: list[int] = []
+    for h in handles:
+        try:
+            ints.append(int(h))
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "error": f"invalid handle value: {h!r}",
+                "handles": list(handles),
+            }
+    arr = "#(" + ", ".join(str(h) for h in ints) + ")"
+    code = f"MCP_SceneManage.selectByHandles {arr}"
+    raw = _exec_ms(client, code, timeout=30.0).strip()
+    text = raw
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        text = text[1:-1]
+        text = (
+            text.replace('\\"', '"')
+            .replace("\\\\", "\\")
+            .replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+        )
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return {"ok": False, "error": f"bad selectByHandles payload: {raw!r}", "handles": ints}
+    count = int(data.get("count") or 0)
+    if not data.get("ok") or count <= 0:
+        return {
+            "ok": False,
+            "error": f"no scene objects found for handles={ints!r}",
+            "handles": ints,
+            "raw": raw,
+        }
+    return {
+        "ok": True,
+        "count": count,
+        "handles": list(data.get("handles") or ints),
+        "names": list(data.get("names") or []),
+        "raw": raw,
+    }
+
+
 def _require_selection(
     client: Any,
     *,
-    names: Sequence[str] | None,
+    names: Sequence[str] | None = None,
+    handles: Sequence[int] | None = None,
     role: str,
 ) -> dict[str, Any]:
     """Ensure Max has a non-empty selection before clicking 选定."""
+    if handles:
+        sel = _select_objects_by_handles(client, list(handles))
+        if not sel.get("ok"):
+            return sel
+        time.sleep(0.2)
+        return sel
     if names:
         sel = _select_objects_via_max(client, list(names))
         if not sel.get("ok"):
@@ -348,12 +412,12 @@ def _require_selection(
             "ok": False,
             "error": (
                 f"empty Max selection before 选定 ({role}); "
-                f"pass {role}_names or select objects in the scene first "
+                f"pass {role}_handles / {role}_names or select objects in the scene first "
                 f"(GoSkin warns if 选定 is clicked with no selection)"
             ),
             "count": 0,
         }
-    return {"ok": True, "skipped": True, "count": count, "names": []}
+    return {"ok": True, "skipped": True, "count": count, "names": [], "handles": []}
 
 
 def _snapshot_ocr(
@@ -670,6 +734,8 @@ def build_start_confirmation(
     ocr_texts: Sequence[str] | None = None,
     mesh_names: Sequence[str] | None = None,
     bone_names: Sequence[str] | None = None,
+    mesh_handles: Sequence[int] | None = None,
+    bone_handles: Sequence[int] | None = None,
     select_mesh_scene: dict[str, Any] | None = None,
     select_bones_scene: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -678,20 +744,32 @@ def build_start_confirmation(
     ocr_names = _extract_edit_names(texts)
     mesh_list = list(mesh_names or []) or list((select_mesh_scene or {}).get("names") or []) or ocr_names["mesh_names_ocr"]
     bone_list = list(bone_names or []) or list((select_bones_scene or {}).get("names") or []) or ocr_names["bone_names_ocr"]
+    mesh_h = list(mesh_handles or []) or list((select_mesh_scene or {}).get("handles") or [])
+    bone_h = list(bone_handles or []) or list((select_bones_scene or {}).get("handles") or [])
     counts = counts or {}
     mesh_n = counts.get("mesh")
     joint_n = counts.get("joints")
     if mesh_n is None:
-        mesh_n = len(mesh_list) if mesh_list else None
+        mesh_n = len(mesh_h) if mesh_h else (len(mesh_list) if mesh_list else None)
     if joint_n is None:
-        joint_n = len(bone_list) if bone_list else None
+        joint_n = len(bone_h) if bone_h else (len(bone_list) if bone_list else None)
 
+    mesh_desc = (
+        ", ".join(str(h) for h in mesh_h)
+        if mesh_h
+        else (", ".join(mesh_list) if mesh_list else "(未识别到名称)")
+    )
+    bone_desc = (
+        ", ".join(str(h) for h in bone_h)
+        if bone_h
+        else (", ".join(bone_list) if bone_list else "(未识别到名称)")
+    )
     summary_lines = [
         "即将点击「开始蒙皮」，请确认以下信息：",
         f"- 模型数量: {mesh_n if mesh_n is not None else '?'}",
-        f"- 模型名称: {', '.join(mesh_list) if mesh_list else '(未识别到名称)'}",
+        f"- 模型({'handles' if mesh_h else '名称'}): {mesh_desc}",
         f"- 关节/骨骼数量: {joint_n if joint_n is not None else '?'}",
-        f"- 关节/骨骼名称: {', '.join(bone_list) if bone_list else '(未识别到名称)'}",
+        f"- 关节/骨骼({'handles' if bone_h else '名称'}): {bone_desc}",
         "确认后请调用 goskin_confirm_start(user_confirmed=true)。未确认不会点击「开始蒙皮」。",
     ]
     return {
@@ -701,7 +779,10 @@ def build_start_confirmation(
         "joint_count": joint_n,
         "mesh_names": mesh_list,
         "bone_names": bone_list,
+        "mesh_handles": mesh_h,
+        "bone_handles": bone_h,
         "summary": "\n".join(summary_lines),
+        "user_prompt": "\n".join(summary_lines),
         "prompt_zh": summary_lines[0],
     }
 
@@ -785,6 +866,8 @@ def run_goskin_skin(
     *,
     mesh_names: Sequence[str] | None = None,
     bone_names: Sequence[str] | None = None,
+    mesh_handles: Sequence[int] | None = None,
+    bone_handles: Sequence[int] | None = None,
     title_pattern: str = TITLE_PATTERN,
     vendor_pattern: str = VENDOR_PATTERN,
     ocr_base: str = DEFAULT_OCR_BASE,
@@ -801,6 +884,9 @@ def run_goskin_skin(
       → click list slot「(选中后在编辑区添加)」→ select mesh → 选定(模型行)
       → focus 模型：N → select bones → 选定(关节行)
       → pause for user confirm → [optional] 开始蒙皮
+
+    Prefer ``mesh_handles`` / ``bone_handles`` when available (stable within the
+    loaded scene). Names remain supported as a fallback.
 
     Default ``click_start=False``: returns ``confirmation`` summary and does NOT
     click 「开始蒙皮」. After the user agrees, call ``confirm_goskin_start(user_confirmed=True)``.
@@ -837,7 +923,9 @@ def run_goskin_skin(
         return {"ok": False, "steps": steps, "error": slot.get("error")}
 
     # ----- Step 1: mesh -----
-    sel_mesh = _require_selection(client, names=mesh_names, role="mesh")
+    sel_mesh = _require_selection(
+        client, names=mesh_names, handles=mesh_handles, role="mesh"
+    )
     steps["select_mesh_scene"] = sel_mesh
     if not sel_mesh.get("ok"):
         return {"ok": False, "steps": steps, "error": sel_mesh.get("error")}
@@ -901,7 +989,9 @@ def run_goskin_skin(
     steps["list_focus"] = focus
     time.sleep(0.3)
 
-    sel_bones = _require_selection(client, names=bone_names, role="bone")
+    sel_bones = _require_selection(
+        client, names=bone_names, handles=bone_handles, role="bone"
+    )
     steps["select_bones_scene"] = sel_bones
     if not sel_bones.get("ok"):
         return {"ok": False, "steps": steps, "error": sel_bones.get("error")}
@@ -957,6 +1047,8 @@ def run_goskin_skin(
         ocr_texts=after_bones.get("ocr_texts"),
         mesh_names=mesh_names,
         bone_names=bone_names,
+        mesh_handles=mesh_handles,
+        bone_handles=bone_handles,
         select_mesh_scene=sel_mesh,
         select_bones_scene=sel_bones,
     )
@@ -1008,6 +1100,8 @@ def run_goskin_auto(
     *,
     mesh_names: Sequence[str] | None = None,
     bone_names: Sequence[str] | None = None,
+    mesh_handles: Sequence[int] | None = None,
+    bone_handles: Sequence[int] | None = None,
     menu: str = "自动蒙皮",
     item: str = "GoSkinning",
     open_wait_s: float = 8.0,
@@ -1036,6 +1130,8 @@ def run_goskin_auto(
         client,
         mesh_names=mesh_names,
         bone_names=bone_names,
+        mesh_handles=mesh_handles,
+        bone_handles=bone_handles,
         complete_timeout_s=complete_timeout_s,
         click_start=click_start,
         require_counts=require_counts,

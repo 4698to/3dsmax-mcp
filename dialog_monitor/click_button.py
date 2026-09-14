@@ -374,8 +374,8 @@ local _dmOut = _dmDir + "dialog_monitor_" + (timeStamp() as string) + ".png"
         local matches = MCP_DialogMonitor.findDialog visibleOnly:true parentType:"desktop"
         if matches.count == 0 then "ERROR: dialog not found"
         else (
-          local hwnd = MCP_DialogMonitor.asHwndInt matches[1][1]
-          local dlgTitle = MCP_DialogMonitor.normalizeTitle matches[1][5]
+          local hwnd = MCP_DialogMonitor.asHwndInt (matches[1][1])
+          local dlgTitle = MCP_DialogMonitor.normalizeTitle (matches[1][5])
           local geom = MCP_DialogMonitor.getWindowGeom hwnd
           if geom == undefined then "ERROR: could not read window geometry"
           else (
@@ -909,8 +909,8 @@ def dialog_exists(
         local matches = MCP_DialogMonitor.findDialog visibleOnly:true parentType:"desktop"
         if matches.count == 0 then "NONE"
         else (
-          local hwnd = MCP_DialogMonitor.asHwndInt matches[1][1]
-          local dlgTitle = MCP_DialogMonitor.normalizeTitle matches[1][5]
+          local hwnd = MCP_DialogMonitor.asHwndInt (matches[1][1])
+          local dlgTitle = MCP_DialogMonitor.normalizeTitle (matches[1][5])
           "OK|" + (hwnd as string) + "|" + dlgTitle + "|" + (matches.count as string)
         )
     )"""

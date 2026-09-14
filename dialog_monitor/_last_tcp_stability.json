@@ -1,0 +1,103 @@
+[
+  {
+    "name": "ping_type",
+    "ok": true,
+    "ms": 40,
+    "result": "{\"pong\":true,\"server\":\"3dsmax-mcp\",\"protocolVersion\":2,\"bindIP\":\"127.0.0.1\",\"maxVersion\":2015,\"renderer\":\"Default_Scanline_Renderer\",\"objectCount\":91,\"selectionCount\":0,\"safeMode\":false,\"port\":8765}",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "string",
+    "ok": true,
+    "ms": 15,
+    "result": "ok",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "math",
+    "ok": true,
+    "ms": 46,
+    "result": "2",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "objects_count",
+    "ok": true,
+    "ms": 35,
+    "result": "91",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "selection_count",
+    "ok": true,
+    "ms": 27,
+    "result": "0",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "max_version",
+    "ok": true,
+    "ms": 40,
+    "result": "17000",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "scene_manage",
+    "ok": true,
+    "ms": 33,
+    "result": "scene-ok",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "dialog_monitor_loaded",
+    "ok": true,
+    "ms": 32,
+    "result": "dm-ok",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "get_desktop_hwnd",
+    "ok": true,
+    "ms": 33,
+    "result": "65552P",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "get_max_hwnd",
+    "ok": true,
+    "ms": 46,
+    "result": "1903042P",
+    "error": "",
+    "success": true
+  },
+  {
+    "name": "children_desktop_count",
+    "ok": true,
+    "ms": 63,
+    "result": "kids=2647",
+    "error": ""
+  },
+  {
+    "name": "findDialog_safe",
+    "ok": true,
+    "ms": 157,
+    "result": "count=0 title=",
+    "error": ""
+  },
+  {
+    "name": "dialog_exists_style",
+    "ok": true,
+    "ms": 150,
+    "result": "NONE",
+    "error": ""
+  }
+]
