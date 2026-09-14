@@ -17,6 +17,7 @@ from pathlib import Path
 from ..helpers.maxscript import safe_string
 
 from .material_detection import _COLOR_CHANNELS
+from ._fstorm_material_builder import fstorm_group_lines, fstorm_setup_lines
 from .material_shell import (
     UBER_OUT_B as _UBER_OUT_B,
     UBER_OUT_G as _UBER_OUT_G,
@@ -176,6 +177,8 @@ RENDERER_LABELS: dict[str, str] = {
     "redshift": "Redshift RS_Standard_Material",
     "vray": "V-Ray VRayMtl",
     "corona": "Corona CoronaPhysicalMtl",
+    "fstorm": "FStorm (legacy)",
+    "fstorm_pbr": "FStorm PBR (FStormPBR)",
     "octane_standard": "Octane Std Surface (Std_Surface_Mtl)",
     "octane_pbr": "Octane Open PBR Surface (Open_PBR_Surf__Mtl)",
     "octane_universal": "Octane Universal (Universal_material)",
@@ -193,7 +196,7 @@ def _ms_name_array(values: list[str]) -> str:
 
 def groups_need_uberbitmap_osl(groups: list[dict], renderer: str) -> bool:
     """True when the legacy UberBitmap2 OSL helper is needed for ORM splits."""
-    if renderer in {"materialx", "corona"} or renderer.startswith("octane"):
+    if renderer in {"materialx", "corona", "fstorm", "fstorm_pbr"} or renderer.startswith("octane"):
         return False
     return any("orm" in group["channels"] for group in groups)
 
@@ -245,6 +248,8 @@ def pbr_renderer_setup_lines(
 ) -> list[str]:
     """Renderer-specific top-level setup (OSL paths, MaterialX OSL helpers, …)."""
     lines: list[str] = []
+    if renderer in {"fstorm", "fstorm_pbr"}:
+        return fstorm_setup_lines()
     if renderer == "corona":
         lines.extend([
             "fn mcp_coronaBitmap path nodeName rawData = (",
@@ -310,6 +315,9 @@ def pbr_per_group_lines(
     logic. The block defines locals ``channelList`` and ``skippedList`` for the
     caller to embed in summary messages.
     """
+    if renderer in {"fstorm", "fstorm_pbr"}:
+        return fstorm_group_lines(group, idx=idx, mat_var=mat_var, mat_name=mat_name,
+                                  renderer=renderer, include_displacement=include_displacement)
     is_octane = renderer.startswith("octane")
     channels: dict[str, Path] = group["channels"]
     lines: list[str] = []

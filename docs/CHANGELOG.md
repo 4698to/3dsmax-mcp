@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+- Added FStorm legacy and FStormPBR material routes for texture folders, palette laydown, smart import and shell-material construction.
+- Added FStorm plane/disc/sphere lighting and solar sun creation, inspection and guarded edits for power, color, size, visibility, shadows and solar position.
+- Added FStorm plugin discovery guidance covering nested/shared material graphs, FrontBack inputs, the published bitmap reload method, cameras and native lighting controls.
+- Added offline material routing regressions and a reproducible, non-rendering FStorm batch acceptance script.
+- Added offline lighting regressions and disposable live acceptance checks for emitter bounds, solar settings and stale/batch/target guards.
+
 ## [1.7.0] — 2026-09-13
 
 - Added Corona lights and environment support, plus Corona PBR materials for palette laydown, smart import and texture-folder workflows.

@@ -20,6 +20,9 @@ def create_lights(lights: list[LightSpec], renderer: str = "current", distance_u
     """Create 1..32 semantic lights in one native transaction with typed readback.
     Finite spherical bulbs are area/sphere; HDRI skies are environment. Distances
     use scene, mm, cm, m, in or ft. Orientation uses a world aim_at or direction.
+    FStorm: area rectangle/disk/sphere, renderer power, RGB or Kelvin. Directional
+    sun uses fstorm.solar (hour/month/latitude/north_direction) without orientation.
+    Optional fstorm controls include visibility, double_sided and sun_size/model.
     Discover supported kinds and physical/native output units first. Native maps
     and environment bindings are created in the same transaction. No render starts.
     """
@@ -48,7 +51,11 @@ def edit_lights(edits: list[dict[str, Any]], distance_unit: str = "scene") -> di
     """Edit inspected lights atomically. Each edit contains light_ref,
     expected_light (the light_token from inspection), changes and optional
     sharing='all_instances'. Changes accept color, output, enabled, cast_shadows
-    and a complete size for the existing shape. Dimensions use distance_unit.
+    and a complete size for the existing shape. FStorm also accepts nested fstorm
+    controls: visible, gi_visible, double_sided, affect_diffuse, affect_glossy,
+    solar, sun_model, sun_size. Solar edits preserve unspecified settings and
+    require an untargeted sun. Sun RGB selects legacy mode; Kelvin is area-only.
+    Dimensions use distance_unit; inspected dimensions are in scene units.
     A changed light/map/controller invalidates the token; inspect again.
     Move/aim nodes with transform tools; changing emitter class is not implicit.
     """

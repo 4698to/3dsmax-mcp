@@ -12,6 +12,8 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from . import plugin_schema as api
+from . import fstorm_lighting as fs
+from .fstorm_lighting import FStormControls
 from .plugin_semantics import VRAY_LIGHT, VRAY_SHAPES, VRAY_UNITS, OCTANE_SHAPES, VRAY_IMAGE_MAPPING
 from .plugin_semantics import (CORONA_RENDERER, CORONA_LIGHT, CORONA_SUN, CORONA_MOON, CORONA_SKY, CORONA_BITMAP,
                                CORONA_SHAPES, CORONA_UNITS, CORONA_COLOR_MODES, CORONA_SUN_COLOR_MODES, CORONA_BITMAP_MAPPING)
@@ -31,8 +33,9 @@ RENDERER_FAMILIES = {
     (1941615238, 2012806412): "vray", (1770671000, 1323107829): "vray",
     (2717442453, 1319335807): "octane", (1, 0): "photometric",
     CORONA_RENDERER: "corona",
+    fs.FSTORM_RENDERER: "fstorm",
 }
-FAMILY_NAMES = {"vray", "octane", "photometric", "corona"}
+FAMILY_NAMES = {"vray", "octane", "photometric", "corona", "fstorm"}
 
 
 class Strict(BaseModel):
@@ -109,6 +112,7 @@ class LightSpec(Strict):
     enabled: StrictBool = True
     cast_shadows: StrictBool = True
     environment: EnvironmentSource | None = None
+    fstorm: FStormControls | None = None
 
     @model_validator(mode="after")
     def compatible_fields(self):
@@ -118,8 +122,9 @@ class LightSpec(Strict):
             if self.environment is None or any(x is not None for x in (self.shape, self.size, self.position, self.orientation, self.color)):
                 raise ValueError("Environment requires an environment source, without finite emitter/color fields.")
         elif self.kind == "directional":
-            if self.orientation is None or any(x is not None for x in (self.shape, self.size, self.environment)):
-                raise ValueError("Directional lights require orientation, without shape, size or environment source.")
+            solar = self.fstorm is not None and self.fstorm.solar is not None
+            if (self.orientation is not None) == solar or any(x is not None for x in (self.shape, self.size, self.environment)):
+                raise ValueError("Directional lights require either orientation or FStorm solar settings, without shape, size or environment source.")
         else:
             if self.environment is not None:
                 raise ValueError("Only environment lights accept an environment source.")
@@ -225,6 +230,9 @@ class Plan:
         schema = self.schemas[resource_id]
         found = [p for p in schema["properties"] if (p["name"] == name if isinstance(name, str)
                  else p["property_ref"] == prop(name[1], name[0]))]
+        # FStormSunLight repeats an identical targeted descriptor (same PB/param).
+        # Keep conflicting duplicates so the ambiguity guard still refuses them.
+        found = [p for i, p in enumerate(found) if p not in found[:i]]
         if len(found) != 1 or expected_type is not None and found[0]["type"] != expected_type:
             raise ValueError(f"SCHEMA_CONFLICT: {schema['identity']['label']} binding {name!r} is missing, ambiguous or changed type.")
         actual_type = found[0]["type"]
@@ -244,6 +252,12 @@ def compile_lights(specs: list[LightSpec], context: dict, family: str, unit="sce
     plan = Plan(context)
     for i, spec in enumerate(specs):
         key = f"light_{i}"
+        if spec.fstorm is not None and family != "fstorm":
+            raise ValueError("FStorm controls require the FStorm lighting provider.")
+        if family == "fstorm":
+            compile_fstorm(plan, key, spec, scale)
+            plan.lights.append({"id": key, "kind": spec.kind, "family": family})
+            continue
         if spec.kind == "environment":
             compile_environment(plan, key, spec, family)
             plan.lights.append({"id": key, "kind": "environment", "family": family})
@@ -325,6 +339,41 @@ def compile_lights(specs: list[LightSpec], context: dict, family: str, unit="sce
                 if shape == "cylinder": plan.set(key, "height", size["length"])
         plan.lights.append({"id": key, "kind": spec.kind, "family": family})
     return plan
+
+
+def compile_fstorm(plan: Plan, key: str, spec: LightSpec, scale: float):
+    sun = spec.kind == "directional"
+    controls = spec.fstorm or FStormControls()
+    if spec.kind not in {"area", "directional"}:
+        raise ValueError("FStorm supports area lights and solar directional suns; environment/point routes are not provided.")
+    fs.validate_output(spec.output, sun=sun)
+    if sun:
+        if spec.body == "moon" or controls.solar is None or spec.orientation is not None:
+            raise ValueError("FStorm sun creation requires fstorm.solar, without moon or node orientation.")
+        if not spec.cast_shadows:
+            raise ValueError("FStorm sun has no cast_shadows switch.")
+        matrix = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [v * scale for v in (spec.position or [0, 0, 0])]]
+    else:
+        if spec.shape not in fs.SHAPES:
+            raise ValueError("FStorm supports rectangle, disk and sphere area lights.")
+        matrix = world_matrix(spec, scale)
+    plan.create(key, fs.FSTORM_SUN if sun else fs.FSTORM_LIGHT, name=spec.name, matrix=matrix)
+    assign = lambda name, value: plan.set(key, name, value)
+    assign("targeted", False)
+    assign("enabled", spec.enabled)
+    assign("power", spec.output.value)
+    if sun:
+        assign("model", {"legacy": 0, "physical": 1}[controls.sun_model or ("legacy" if spec.color else "physical")])
+    else:
+        assign("shape", fs.SHAPES[spec.shape])
+        assign("cast_shadows", spec.cast_shadows)
+        assign("directional", False)
+        assign("ies_enabled", False)
+        fs.set_size(spec.shape, {k: v*scale for k,v in spec.size.model_dump(exclude_none=True).items()}, assign)
+    fs.apply_controls(controls.model_copy(update={"sun_model": None}) if sun else controls, sun=sun, assign=assign)
+    color = spec.color if sun else spec.color or LightColor(kelvin=6500)
+    if color is not None:
+        fs.set_color(color, sun=sun, assign=assign, model=controls.sun_model)
 
 
 def compile_environment(plan: Plan, key: str, spec: LightSpec, family: str):
@@ -479,6 +528,17 @@ def capabilities(requested="current", detail="summary") -> dict:
         result["notes"] = ["Corona lights always cast shadows (cast_shadows=false is refused).",
                            "Environment binds the map itself at output 1.0 and requires Corona's 3ds Max settings environment route; single-map and LightMix overrides are preserved.",
                            "Directional kind creates CoronaSun (body sun, default) or CoronaMoon (body moon); output is Corona's multiplier, orientation is the emission direction. Sky linking, size multiplier and moon phase stay at plugin defaults."]
+    if family == "fstorm":
+        result.update(kinds=["area", "directional"], directional_bodies=["sun"],
+                      area_shapes=list(fs.SHAPES), output_units=["renderer"],
+                      environment_route=None, environment_sources=[],
+                      verification="native_creation_edit_readback_and_bounds; rendered_appearance_unverified",
+                      fstorm_controls=FStormControls.model_json_schema(),
+                      notes=["Regular lights accept RGB or 500..24000 K; power is positive native renderer power per area.",
+                             "Rectangle width/height are full extents; disk/sphere size is radius. Move/aim regular lights with transform tools.",
+                             "Sun creation uses fstorm.solar (hour/month/latitude/north_direction), without orientation. Sun color uses physical model or legacy RGB; no Kelvin or shadow switch.",
+                             "FStormSunLight supplies sun illumination only; this tool does not add FStormSky or change the renderer environment.",
+                             "IES geometry, texture-color creation, renderer switching and VFB preview are not provided."])
     if detail == "full": result["light_spec_schema"] = LightSpec.model_json_schema()
     return result
 
@@ -514,7 +574,7 @@ def create(specs, requested="current", unit="scene", expected_context=None) -> d
 def inspect_one(owner_ref: dict, family: str | None = None) -> dict:
     identity = api.inspect(owner_ref=owner_ref, fields=["__identity_only__"], limit=1)
     ids = tuple(identity["identity"]["class_id"])
-    detected = "vray" if ids == VRAY_LIGHT else "octane" if ids in {OCTANE_LIGHT, OCTANE_ENV} else "photometric" if ids in PHOTOMETRIC.values() else "corona" if ids in {CORONA_LIGHT, CORONA_SUN, CORONA_MOON, CORONA_BITMAP, CORONA_SKY} else None
+    detected = "fstorm" if ids in {fs.FSTORM_LIGHT, fs.FSTORM_SUN} else "vray" if ids == VRAY_LIGHT else "octane" if ids in {OCTANE_LIGHT, OCTANE_ENV} else "photometric" if ids in PHOTOMETRIC.values() else "corona" if ids in {CORONA_LIGHT, CORONA_SUN, CORONA_MOON, CORONA_BITMAP, CORONA_SKY} else None
     environment_bound = (owner_ref.get("root") == "environment" or
         identity["owner_ref"].get("root_binding", {}).get("root") == "environment")
     generic_environment = (identity["identity"].get("superclass_id") == MAP and environment_bound
@@ -525,6 +585,7 @@ def inspect_one(owner_ref: dict, family: str | None = None) -> dict:
         raise ValueError("Light reference provider does not match its actual class.")
     family = detected
     fields = {
+        "fstorm": fs.SUN_FIELDS if ids == fs.FSTORM_SUN else fs.AREA_FIELDS,
         "vray": ["type", "on", "targeted", "castShadows", "color_mode", "color_temperature", "color", "normalizeColor", "multiplier",
                  "sizeWidth", "sizeLength", "size0", "texmap", "texmap_on", "dome_spherical", "dome_finite", "doubleSided", "invisible"],
         "photometric": ["on", "castShadows", "rgb", "useKelvin", "kelvin", "intensity", "intensityType", "useMultiplier", "multiplier",
@@ -545,7 +606,27 @@ def inspect_one(owner_ref: dict, family: str | None = None) -> dict:
     value = lambda name: values.get(name, {}).get("value")
     state = {"provider": family, "owner_ref": data["owner_ref"], "schema_token": data["schema_token"],
              "state_token": data["state_token"], "bindings": data["properties"]}
-    if family == "vray":
+    if family == "fstorm":
+        sun = ids == fs.FSTORM_SUN
+        state.update(kind="directional" if sun else "area", enabled=value("enabled"),
+                     targeted=value("targeted"), output={"value": value("power"), "unit": "renderer"},
+                     cast_shadows=True if sun else value("cast_shadows"))
+        controls = {k: value(k) for k in ("visible", "affect_diffuse", "affect_glossy")}
+        if sun:
+            controls.update(sun_size=value("size"), sun_model={0: "legacy", 1: "physical"}.get(value("model")),
+                            solar={k: value(k) for k in ("hour", "month", "latitude", "north_direction")})
+            state.update(body="sun", color={"physical": True} if value("model") == 1 else {"rgb": value("sun_color"), "space": "rendering"},
+                         direction_source="target" if value("targeted") else "solar")
+        else:
+            shape = next((k for k,v in fs.SHAPES.items() if v == value("shape")), None)
+            mode = value("color_type")
+            state.update(shape=shape, kind="area" if shape else None,
+                         color={"kelvin": value("temperature")} if mode == 1 else {"rgb": value("color"), "space": "rendering"} if mode == 0 else {"texmap": value("texture")},
+                         size={"width": 2*value("size_x"), "height": 2*value("size_y")} if shape == "rectangle" else {"radius": value("size_x")} if shape else None,
+                         ies={"path": value("ies"), "enabled": value("ies_enabled")})
+            controls.update(gi_visible=value("gi_visible"), double_sided=value("double_sided"))
+        state["fstorm"] = controls
+    elif family == "vray":
         shape = next((k for k, v in VRAY_SHAPES.items() if v == value("type")), None)
         state.update(kind="environment" if shape == "environment" else "area" if shape else None,
                      shape=shape, enabled=value("on"), cast_shadows=value("castShadows"),
@@ -650,8 +731,8 @@ def edit(edits: list[dict], unit="scene") -> dict:
         if not state["decoded"]:
             raise ValueError("This light cannot be decoded by a supported provider.")
         changes = item["changes"]
-        if not changes or set(changes) - {"color", "output", "enabled", "cast_shadows", "size"}:
-            raise ValueError("Change color, output, enabled, cast_shadows or the full size of the existing shape.")
+        if not changes or set(changes) - {"color", "output", "enabled", "cast_shadows", "size", "fstorm"}:
+            raise ValueError("Change color, output, enabled, cast_shadows, full size or fstorm controls.")
         if item.get("sharing") not in {None, "all_instances"}:
             raise ValueError("sharing must be omitted or all_instances.")
         family, shape = state["provider"], state.get("shape")
@@ -664,17 +745,31 @@ def edit(edits: list[dict], unit="scene") -> dict:
             owner = state["emission"] if emission else state
             properties = owner["properties"] if emission else owner["bindings"]
             found = [p for p in properties if p["name"] == name and p.get("value_status") == "read"]
+            found = [p for i, p in enumerate(found) if p not in found[:i]]
             if len(found) != 1:
                 raise ValueError(f"SCHEMA_CONFLICT: cannot edit {name!r} without an exact readable binding.")
             payload["edits"].append({"owner_ref": owner["owner_ref"], "property_ref": found[0]["property_ref"],
                                       "value": value, "expected_schema": owner["schema_token"],
                                       "expected_state": owner["state_token"], "sharing": item.get("sharing", "")})
 
+        controls = FStormControls.model_validate(changes["fstorm"]) if "fstorm" in changes else FStormControls()
+        if "fstorm" in changes and family != "fstorm":
+            raise ValueError("FStorm controls require a FStorm light.")
+        if family == "fstorm":
+            sun = state["kind"] == "directional"
+            fs.apply_controls(controls, sun=sun, assign=assign, targeted=state.get("targeted") is not False)
+
         for name in ("enabled", "cast_shadows"):
             if name not in changes:
                 continue
             if type(changes[name]) is not bool:
                 raise ValueError(f"{name} must be boolean.")
+            if family == "fstorm":
+                if name == "cast_shadows" and state["kind"] == "directional":
+                    if not changes[name]: raise ValueError("FStorm sun has no cast_shadows switch.")
+                else:
+                    assign("enabled" if name == "enabled" else "cast_shadows", changes[name])
+                continue
             if family in {"octane", "corona"} and state["kind"] == "environment":
                 raise ValueError("Environment binding enable/shadow changes are not emitter parameters.")
             if family == "corona" and name == "cast_shadows":
@@ -684,7 +779,10 @@ def edit(edits: list[dict], unit="scene") -> dict:
                    changes[name], emission=family == "octane" and name == "cast_shadows")
         if "output" in changes:
             output = LightOutput.model_validate(changes["output"])
-            if family == "vray":
+            if family == "fstorm":
+                fs.validate_output(output, sun=state["kind"] == "directional")
+                assign("power", output.value)
+            elif family == "vray":
                 if output.unit not in VRAY_UNITS or state["kind"] == "environment" and output.unit != "renderer":
                     raise ValueError("Unsupported output unit for this V-Ray emitter.")
                 assign("normalizeColor", VRAY_UNITS[output.unit]); assign("multiplier", output.value)
@@ -708,7 +806,12 @@ def edit(edits: list[dict], unit="scene") -> dict:
         if "color" in changes:
             if state["kind"] == "environment": raise ValueError("Environment color comes from its source map.")
             color = LightColor.model_validate(changes["color"])
-            if family == "vray":
+            if family == "fstorm":
+                sun = state["kind"] == "directional"
+                fs.set_color(color, sun=sun, assign=assign, model=controls.sun_model)
+                if sun and controls.sun_model is None:
+                    assign("model", 0)
+            elif family == "vray":
                 assign("color_mode", int(color.kelvin is not None))
                 assign("color_temperature" if color.kelvin is not None else "color", color.kelvin if color.kelvin is not None else list(color.rgb))
             elif family == "photometric":
@@ -732,7 +835,9 @@ def edit(edits: list[dict], unit="scene") -> dict:
             size = LightSpec.model_validate({"kind": "area", "shape": shape, "size": changes["size"],
                     "orientation": {"direction": [0, 0, -1]}, "output": {"value": 1, "unit": "renderer"}}).size
             dims = {k: v*scale for k, v in size.model_dump(exclude_none=True).items()}
-            if family == "vray":
+            if family == "fstorm":
+                fs.set_size(shape, dims, assign)
+            elif family == "vray":
                 if shape == "rectangle": assign("sizeLength", dims["width"]); assign("sizeWidth", dims["height"])
                 else: assign("size0", dims["radius"])
             elif family == "photometric":

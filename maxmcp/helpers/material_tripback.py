@@ -7,7 +7,7 @@ from typing import Any
 from ..tools._pbr_material_builder import RENDERER_LABELS
 
 # One row per wired PBR renderer. ask_as = values users/agents can pass to material_class.
-PBR_RENDERER_REGISTRY: list[dict[str, Any]] = [
+PBR_RENDERER_REGISTRY: list[dict[str, Any]] = [
     {
         "renderer": "openpbr",
         "label": RENDERER_LABELS["openpbr"],
@@ -43,6 +43,14 @@ PBR_RENDERER_REGISTRY: list[dict[str, Any]] = [
         "renderer": "corona", "label": RENDERER_LABELS["corona"],
         "max_class": "CoronaPhysicalMtl",
         "ask_as": ["CoronaPhysicalMtl", "_CoronaPhysicalMtl", "corona", "corona_physical"],
+    },
+    {
+        "renderer": "fstorm", "label": RENDERER_LABELS["fstorm"],
+        "max_class": "FStorm", "ask_as": ["FStorm", "fstorm_legacy"],
+    },
+    {
+        "renderer": "fstorm_pbr", "label": RENDERER_LABELS["fstorm_pbr"],
+        "max_class": "FStormPBR", "ask_as": ["FStormPBR", "fstorm_pbr"],
     },
     {
         "renderer": "materialx",
@@ -94,7 +102,7 @@ def material_class_hint(
         "renderers": renderers,
         "supported_material_classes": primary_ask_as,
         "summary": (
-            "OpenPBR (default), Physical, Arnold, Redshift, V-Ray, Corona, MaterialX, "
+            "OpenPBR (default), Physical, Arnold, Redshift, V-Ray, Corona, FStorm (legacy / PBR), MaterialX, "
             "Octane (standard / pbr / universal)"
         ),
     }
