@@ -86,28 +86,89 @@ the interface on other versions and report unsupported methods rather than
 clearing filenames as a reload workaround. Generic map inspection/edit tools
 remain available; this change adds no new bulk-reload or FrontBack mutation tool.
 
-## Lights, cameras and conversion limits
+## Lighting
 
-FStorm classes participate in plugin discovery and receive curated recipes and
-gotchas through the manifest/guide resources. Generic object and property tools
-can inspect and edit their exposed settings. The typed `create_lights` provider,
-environment binding and VFB interactive preview are not extended by this change.
+`lighting_capabilities(renderer="fstorm")` discovers the installed provider.
+`create_lights`, `inspect_lights` and `edit_lights` now support native FStorm
+lights through the existing transactional bridge. Creation accepts
+`renderer="fstorm"` even if a different production renderer is selected, and
+reports compatibility without switching renderers.
 
-User observations and the current sun property dump distinguish an untargeted
-`FStormSunLight` driven by `hour`, `month`, `latitude` and `north_direction` from a
-targeted sun. Its node transform alone is insufficient evidence of the evaluated
-solar emission direction. Temporarily targeting a duplicate is a hypothesis for
-baking that direction, not a validated conversion procedure. Do not delete or
-retarget the original based on that assumption. Automatic FStorm-to-Corona sun,
-camera and material conversion is outside this provider.
+| Control | Area lights | Sun |
+| --- | --- | --- |
+| Creation | `rectangle` (plane), `disk` (disc), `sphere` | `directional`, body `sun` |
+| Output | Positive native `renderer` power | Native `renderer` power, 0.001..100000 |
+| Color | Scene-linear RGB or 500..24000 K | Physical model, or legacy RGB |
+| Size | Full width/height or radius | `fstorm.sun_size`, native size multiplier |
+| Visibility/contribution | `visible`, `gi_visible`, `double_sided`, `affect_diffuse`, `affect_glossy` | `visible`, `affect_diffuse`, `affect_glossy` |
+| Enabled/shadows | Both switches | Enabled; no shadow switch |
+| Direction | World `orientation.direction` or `orientation.aim_at` | Native `fstorm.solar` controls |
 
-Light shapes reported by the UI are plane=0, disc=1, sphere=2, IES=3; Corona uses
-different shape values. Treat these as version-specific leads for a future typed
-provider, requiring class/PB identities and geometric validation. A brightness
-match in one scene is not a universal renderer-power or photometric conversion.
-FStorm cameras expose `targ_dist`, while FStorm lights/suns expose
-`target_distance`; resolve the actual target reference instead of guessing its
-name or reading Corona's `targetDistance` property.
+Area dimensions and positions accept `distance_unit` (`scene`, `mm`, `cm`, `m`,
+`in`, `ft`). Readback dimensions are in scene units. FStorm's plane `size_x` and
+`size_y` are half-extents; the provider translates full width/height accordingly.
+Disc and sphere `size_x` is radius. Shape bindings and bounds were checked in Max.
+Power remains FStorm's native value; resizing may change total emitted energy.
+
+For example, pass this to `create_lights` to add a warm rectangular light:
+
+```json
+{
+  "renderer": "fstorm",
+  "distance_unit": "m",
+  "lights": [{
+    "name": "Warm fill",
+    "kind": "area",
+    "shape": "rectangle",
+    "size": {"width": 2, "height": 1},
+    "position": [0, -3, 2],
+    "orientation": {"aim_at": [0, 0, 1]},
+    "color": {"kelvin": 3200},
+    "output": {"value": 10, "unit": "renderer"},
+    "fstorm": {"visible": false, "double_sided": false}
+  }]
+}
+```
+
+Create a sun using FStorm's own solar controls, without `orientation`:
+
+```json
+{
+  "renderer": "fstorm",
+  "lights": [{
+    "name": "Afternoon sun",
+    "kind": "directional",
+    "output": {"value": 1, "unit": "renderer"},
+    "fstorm": {
+      "solar": {"hour": 15, "month": 8, "latitude": 45, "north_direction": 10},
+      "sun_model": "physical",
+      "sun_size": 2
+    }
+  }]
+}
+```
+
+Solar input accepts hour 0..24, month 1..12, latitude -90..90 and north direction
+in degrees. At least one solar field is required for creation; omitted fields
+retain plugin defaults. Editing `changes={"fstorm":{"solar":{"hour":9}}}`
+updates only the hour. Pass the returned `light_ref` and the latest inspected
+`light_token` as `expected_light` to `edit_lights`. An intervening change refuses
+the edit until you inspect again. A batch is preflighted before any edits commit.
+
+New suns are untargeted and keep their native solar driver. Existing targeted
+suns can be inspected and have power/visibility edited, but solar edits refuse
+them rather than changing their targeting mode. The node transform alone does
+not describe an untargeted sun's evaluated direction. Supplying sun RGB selects
+the legacy model; an explicit physical model plus RGB is refused. Suns do not
+accept Kelvin. `sun_size` uses the native range (0.001..100000), independent of
+the scene distance unit.
+
+The typed provider does not create IES lights, texture-driven light color,
+FStormSky/environment bindings, or VFB previews. A sun alone does not create a
+sky. Generic plugin inspection/property tools remain available for other
+settings. Camera and renderer conversion are outside this change. Cameras expose
+`targ_dist`, while lights/suns expose `target_distance`; inspect actual target
+references rather than inferring names.
 
 ## Evidence and validation
 
@@ -123,11 +184,16 @@ Vendor references:
 - [FStorm bitmap manual](https://fstormrender.com/manual/fstorm-bitmap/): bitmap
   correction, image input and mapping concepts. Names above come from runtime
   inspection, not inferred UI labels.
+- [FStorm light manual](https://fstormrender.com/manual/fstorm-light/): light
+  types, native power, color and visibility controls.
+- [FStorm sun manual](https://fstormrender.com/manual/fstorm-sun-light/): native
+  solar and targeted direction, and the separate sky/environment setup.
 
 Run offline checks with the project's Python environment:
 
 ```powershell
 python scripts/test_fstorm_materials.py
+python scripts/test_fstorm_lighting.py
 python scripts/test_fstorm_materials.py --emit-maxscript local/fstorm-smoke.ms
 & 'C:/Program Files/Autodesk/3ds Max 2027/3dsmaxbatch.exe' local/fstorm-smoke.ms
 ```
@@ -139,7 +205,22 @@ input; running the script in an interactive session creates test materials.
 
 Recorded validation on 2026-09-14: six offline regression tests passed, all four
 runtime material cases passed, and bitmap reload/FrontBack readback passed.
-The runtime cases check legacy/PBR slots, color/data gamma flags, AO links,
+Lighting acceptance also runs from Python against an explicitly chosen disposable
+Max instance with FStorm and the native bridge loaded:
+
+```powershell
+python scripts/test_fstorm_lighting.py --pid <disposable-max-process-id>
+```
+
+It creates uniquely named test lights and cleans them up, without rendering,
+resetting or saving the scene. Five offline lighting tests and live acceptance
+passed on the same build, including independent emitter bounding boxes, unit
+conversion, color/visibility edits, partial solar changes, stale-token rejection,
+invalid-batch refusal and preservation of targeted-sun ownership.
+
+The material runtime cases check legacy/PBR slots, color/data gamma flags, AO links,
 roughness/glossiness, normal/bump priority, metallic, emission and displacement
 enablement. These are graph-construction/readback checks. Rendered appearance,
-normal handedness, cross-version behavior and solar conversion are unvalidated.
+normal handedness and cross-version behavior are unvalidated. Lighting checks
+establish construction, geometry and property readback; rendered appearance and
+solar angular accuracy were not tested.
