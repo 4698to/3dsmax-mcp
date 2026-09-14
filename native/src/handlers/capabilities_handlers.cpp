@@ -37,15 +37,6 @@ bool MatchesAny(
     return false;
 }
 
-bool StartsWithAny(
-    const std::string& value,
-    std::initializer_list<const char*> prefixes) {
-    for (const char* prefix : prefixes) {
-        if (value.rfind(prefix, 0) == 0) return true;
-    }
-    return false;
-}
-
 std::vector<std::string> MaxScriptClassNames(SClass_ID superClassId) {
     struct ScriptClassEntry {
         Class_ID classId;
@@ -132,11 +123,10 @@ void DetectKnownPlugin(
 
         if (name == "tyflow") tyFlow = true;
         if (MatchesAny(name, {"railclonepro", "railclone"})) railClone = true;
-        // Phoenix FD registers several classes under a PHX* or PhoenixFD* prefix
-        // (PHXSimulator, PHXFoam, PhoenixFDPartSys, PhoenixFD_Force, ...).
-        // The single legacy name is kept for older Phoenix builds.
-        if (name == "phoenixfdliquid" ||
-            StartsWithAny(name, {"phx", "phoenixfd"})) {
+        // Require a simulator, not renderer-side Phoenix compatibility maps
+        // such as Octane's PhxParticleTex. Keep the legacy simulator alias.
+        if (descriptor->SuperClassID() == GEOMOBJECT_CLASS_ID &&
+            MatchesAny(name, {"phxsimulator", "liquidsim", "firesmokesim", "phoenixfdliquid"})) {
             phoenixFD = true;
         }
     }
