@@ -7,7 +7,7 @@ from typing import Any
 
 from ..coerce import DictList
 from ..helpers.curve_runtime import CURVE_FUNCTIONS, FINGERPRINT, read_curve, run
-from ..helpers.curves import Curve, Segment, curve_qa, keys, line
+from ..helpers.curves import Curve, Segment, curve_qa, curve_backtracking, keys, line
 from ..helpers.mesh import MESH_FUNCTIONS, integer, point, target_script, vector
 from ..server import client, mcp
 
@@ -49,7 +49,8 @@ def inspect_curve(
     """Read an editable spline's world knots/handles, QA, and stale-edit token.
 
     Spline is 1-based. knot_ids filters output; limit caps rows, not QA. read
-    reports sampled planarity/intersections/tangent breaks (corners can be intended).
+    reports sampled planarity/intersections, tangent breaks, and analytic per-segment
+    backtracking along endpoint chords (corners and backtracking can be intended).
     capture labels K#/I#/O# into an AGENT VIEWPORT image, never the user's view.
     pick needs x/y normalized to that image and expected_view; ranks knot and
     handle candidates within tolerance (fraction of shorter image dimension).
@@ -86,7 +87,9 @@ def inspect_curve(
     c=_curve(row)
     if c:
         try: result["qa"]=curve_qa(c)
-        except ValueError as exc: result["qa"]={"complete":False,"reason":str(exc)}
+        except ValueError as exc:
+            result["qa"]={"complete":False,"reason":str(exc),
+                          "segment_backtracking":curve_backtracking(c)}
     else: result["qa"]={"complete":False,"reason":"Spline has no segments"}
     labels=[]; candidates=[]
     for k in chosen:

@@ -10,11 +10,13 @@ pathInterp all operate in the working coordinate system regardless of node pos).
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any, Optional
 
 from ..coerce import DictList
 from ..helpers.maxscript import safe_string
+from ..helpers.curves import add, sub, mul, length
 from ..server import client, mcp
 
 KNOT_TYPES = {
@@ -25,6 +27,7 @@ KNOT_TYPES = {
     "bezier_corner": "#bezierCorner",
 }
 SEG_TYPES = {"line": "#line", "curve": "#curve"}
+CREATE_KNOT_TYPES = set(KNOT_TYPES) | {"bounded"}
 MAX_POINTS = 2000
 MAX_KNOTS_OUT = 400
 _P3_RE = re.compile(r"\[([-+\d.eE]+),([-+\d.eE]+),([-+\d.eE]+)\]")
@@ -44,7 +47,8 @@ def _run(script: str) -> str:
 def _p3(value: Any) -> list[float] | None:
     if isinstance(value, (list, tuple)) and len(value) == 3:
         try:
-            return [float(v) for v in value]
+            result = [float(v) for v in value]
+            return result if all(math.isfinite(v) for v in result) else None
         except (TypeError, ValueError):
             return None
     return None
@@ -95,8 +99,8 @@ def _normalize_points(points: Any, default_type: str) -> tuple[list[dict[str, An
             if pos is None:
                 return [], f"point {i + 1}: dict needs pos [x,y,z]"
             ktype = str(item.get("type") or default_type).strip().lower()
-            if ktype not in KNOT_TYPES:
-                return [], f"point {i + 1}: type must be one of {sorted(set(KNOT_TYPES))}"
+            if ktype not in CREATE_KNOT_TYPES:
+                return [], f"point {i + 1}: type must be one of {sorted(CREATE_KNOT_TYPES)}"
             in_vec = _p3(item.get("in_vec") if item.get("in_vec") is not None else item.get("in"))
             out_vec = _p3(item.get("out_vec") if item.get("out_vec") is not None else item.get("out"))
             seg = str(item.get("seg") or item.get("segment") or "").strip().lower()
@@ -111,12 +115,59 @@ def _normalize_points(points: Any, default_type: str) -> tuple[list[dict[str, An
     if len(out) > MAX_POINTS:
         return [], f"{len(out)} points exceeds the {MAX_POINTS}-point cap"
     for i, p in enumerate(out):
+        if p["type"] == "bounded" and (p["in"] is not None or p["out"] is not None):
+            return [], f"point {i + 1}: bounded computes handles; use bezier for explicit handles"
         if p["type"] in {"bezier", "beziercorner", "bezier_corner"} and (p["in"] is None or p["out"] is None):
             return [], (
                 f"point {i + 1}: bezier knots need in_vec and out_vec (absolute handle "
                 "positions, not directions) — use type 'smooth' for auto tangents"
             )
     return out, ""
+
+
+def _bounded_points(pts, closed=False):
+    """Resolve bounded knots to explicit handles; never rely on Max auto tangents.
+
+    A unit-chord bisector keeps tangent directions forward on both incident
+    segments. Handles are at most one third of the shorter adjacent chord, so
+    fully bounded segments have monotonically ordered chord projections.
+    Reversing/collocated input points use zero handles instead of inventing a turn.
+    Other knot types and explicit handles are preserved.
+    """
+    result = [dict(p) for p in pts]
+    for i, p in enumerate(pts):
+        if p["type"] != "bounded":
+            continue
+        before = sub(p["pos"], pts[i-1]["pos"]) if i or closed else None
+        after = sub(pts[(i+1) % len(pts)]["pos"], p["pos"]) if i+1 < len(pts) or closed else None
+        vectors = [v for v in (before, after) if v is not None]
+        lengths = [length(v) for v in vectors]
+        direction = [0., 0., 0.]
+        if lengths and min(lengths) > 1e-8:
+            tangent = [sum(v[a]/n for v, n in zip(vectors, lengths)) for a in range(3)]
+            magnitude = length(tangent)
+            if magnitude > 1e-8:
+                direction = mul(tangent, min(lengths)/(3*magnitude))
+        result[i].update(type="beziercorner",
+                         **{"in": sub(p["pos"], direction) if before is not None else p["pos"],
+                            "out": add(p["pos"], direction) if after is not None else p["pos"]})
+    return result
+
+
+def _creation_warnings(pts, closed=False):
+    uneven = []
+    for i, p in enumerate(pts):
+        if p["type"] != "smooth" or (not closed and i in (0, len(pts)-1)):
+            continue
+        a = length(sub(p["pos"], pts[i-1]["pos"]))
+        b = length(sub(pts[(i+1) % len(pts)]["pos"], p["pos"]))
+        if min(a, b) <= 1e-8 or max(a, b) >= 4*min(a, b):
+            uneven.append(i+1)
+    if not uneven:
+        return []
+    return [{"code": "AUTO_TANGENT_OVERSHOOT_RISK", "knots": uneven,
+             "message": "Smooth auto tangents can overshoot unevenly spaced points; "
+                        "use knot_type='bounded' or explicit Bezier handles, then inspect_curve."}]
 
 
 def _knot_lines(var: str, spline_idx: str, pts: list[dict[str, Any]]) -> list[str]:
@@ -200,10 +251,14 @@ def draw_spline(
 
     Actions:
     - create: new shape from `points` — each point is [x,y,z] or a dict
-      {pos, type: corner|smooth|bezier|bezierCorner, seg: line|curve, in_vec, out_vec}
+      {pos, type: corner|smooth|bounded|bezier|bezierCorner, seg: line|curve, in_vec, out_vec}
       (bezier handle vecs are absolute positions). closed=true closes the loop.
       knot_type sets the default; thickness>0 makes it renderable; center_pivot
-      moves the pivot to the bbox center.
+      moves the pivot to the bbox center. Default smooth uses Max auto tangents and
+      can overshoot uneven point spacing. Use bounded for sampled pipe/cable paths:
+      it generates explicit short, aligned Bezier handles without segment backtracking
+      along endpoint chords. This is not a global self-intersection guarantee.
+      bounded is supported by create/add_spline only; corner preserves a polyline.
     - add_spline: add another spline (from `points`) to an existing shape — holes,
       multi-outline shapes. Converts parametric shapes to editable SplineShape.
     - get: read back splines/knots (positions, types, handle vecs) plus optional
@@ -228,8 +283,8 @@ def draw_spline(
         return _err("name is required")
     safe = safe_string(name)
     default_type = knot_type.strip().lower() or "smooth"
-    if default_type not in KNOT_TYPES:
-        return _err(f"knot_type must be one of {sorted(set(KNOT_TYPES))}")
+    if default_type not in CREATE_KNOT_TYPES:
+        return _err(f"knot_type must be one of {sorted(CREATE_KNOT_TYPES)}")
     editable_guard = _editable_guard(convert)
 
     if action == "create":
@@ -244,7 +299,8 @@ def draw_spline(
             "local ss = splineShape name:finalName pos:[0,0,0]",
             "addNewSpline ss",
         ]
-        lines += _knot_lines("ss", "1", pts)
+        warnings = _creation_warnings(pts, closed)
+        lines += _knot_lines("ss", "1", _bounded_points(pts, closed))
         if closed:
             lines.append("close ss 1")
         lines.append("updateShape ss")
@@ -258,6 +314,8 @@ def draw_spline(
             return _err(f"unexpected bridge reply: {raw[:300]}")
         summary["closed"] = closed
         summary["renderable"] = thickness > 0
+        if warnings:
+            summary["warnings"] = warnings
         if summary["name"] != name:
             summary["renamed_from"] = name
         return summary
@@ -275,7 +333,8 @@ def draw_spline(
             "addNewSpline obj",
             "local sidx = numSplines obj",
         ]
-        for line in _knot_lines("obj", "sidx", pts):
+        warnings = _creation_warnings(pts, closed)
+        for line in _knot_lines("obj", "sidx", _bounded_points(pts, closed)):
             body.append(line)
         if closed:
             body.append("close obj sidx")
@@ -295,6 +354,7 @@ def draw_spline(
             "spline_index": int(parts[1]) if parts[1].isdigit() else 0,
             "converted_to_splineshape": parts[2] == "true",
             "knots": int(parts[3]) if parts[3].isdigit() else 0,
+            **({"warnings": warnings} if warnings else {}),
             "closed": closed,
         }
 

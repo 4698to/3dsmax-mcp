@@ -338,6 +338,34 @@ class Curve:
         return result
 
 
+def curve_backtracking(curve):
+    """Find backwards travel along each cubic's endpoint chord, analytically.
+
+    This is independent of sampling and planarity. Backtracking can be intended
+    (e.g. a looping Bezier); it is a diagnostic, not an intersection certificate.
+    A zero-length endpoint chord has no forward direction and is skipped.
+    """
+    result = []
+    for i, s in enumerate(curve.segments):
+        chord = sub(s.end, s.start)
+        norm2 = dot(chord, chord)
+        if norm2 <= EPS * EPS:
+            continue
+        d0, d1, d2 = [dot(sub(b, a), chord) / norm2 for a, b in
+                      ((s.start, s.out), (s.out, s.incoming), (s.incoming, s.end))]
+        a, b, c = d0 - 2*d1 + d2, 2*(d1 - d0), d0
+        candidates = [0., 1.]
+        if a > 0:
+            t = -b / (2*a)
+            if 0 < t < 1:
+                candidates.append(t)
+        t = min(candidates, key=lambda t: (a*t+b)*t+c)
+        speed = 3*((a*t+b)*t+c)
+        if speed < -1e-9:
+            result.append({"segment": i+1, "t": t, "min_forward_derivative": speed})
+    return result
+
+
 def curve_qa(curve,tolerance=.01):
     points=curve.polyline(tolerance)
     if len(points)>1025:
@@ -377,7 +405,9 @@ def curve_qa(curve,tolerance=.01):
             "endpoint_gap":length(sub(points[0],points[-1])),"planar":planar,"planarity_deviation":deviation,
             "sampled_intersections":len(crossings),"intersection_samples":crossings[:12],
             "intersection_check":"planar polyline approximation" if planar and length(normal)>EPS else "not checked: nonplanar or collinear",
-            "tangent_breaks":breaks,"tolerance":tolerance,"sampled_spans":len(points)-1,
+            "tangent_breaks":breaks,"segment_backtracking":curve_backtracking(curve),
+            "backtracking_check":"analytic chord-projected derivative; zero-length chords skipped; may be intentional",
+            "tolerance":tolerance,"sampled_spans":len(points)-1,
             "bounds":[[min(p[a] for p in points) for a in range(3)],[max(p[a] for p in points) for a in range(3)]]}
 
 
