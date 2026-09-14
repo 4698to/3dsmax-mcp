@@ -45,6 +45,19 @@ inline std::wstring Utf8ToWide(const std::string& s) {
     return w;
 }
 
+// Some plugins prefix a control character to force their class to the top of
+// 3ds Max's alphabetical browsers (Corona registers "\rCoronaPhysicalMtl").
+// MAXScript never exposes those raw bytes: `(classOf m) as string` reports
+// _CoronaPhysicalMtl. Mirror that substitution so one class has one name
+// across every handler, and so the value stays a valid JSON string.
+inline std::string SanitizeScriptName(std::string value) {
+    for (char& ch : value) {
+        const unsigned char byte = static_cast<unsigned char>(ch);
+        if (byte < 0x20 || byte == 0x7F) ch = '_';
+    }
+    return value;
+}
+
 // MAXScript's `(classOf value) as string` exposes the script-facing class
 // token, not the localized UI label returned by Animatable::ClassName().
 inline std::string ScriptClassName(ClassDesc* descriptor) {
@@ -52,16 +65,16 @@ inline std::string ScriptClassName(ClassDesc* descriptor) {
 
     const MCHAR* internalName = descriptor->InternalName();
     if (internalName && *internalName) {
-        return WideToUtf8(internalName);
+        return SanitizeScriptName(WideToUtf8(internalName));
     }
 
     const MCHAR* nonLocalizedName = descriptor->NonLocalizedClassName();
     if (nonLocalizedName && *nonLocalizedName) {
-        return WideToUtf8(nonLocalizedName);
+        return SanitizeScriptName(WideToUtf8(nonLocalizedName));
     }
 
     const MCHAR* className = descriptor->ClassName();
-    return className ? WideToUtf8(className) : std::string();
+    return className ? SanitizeScriptName(WideToUtf8(className)) : std::string();
 }
 
 inline std::string ScriptClassName(Animatable* value) {
@@ -73,7 +86,7 @@ inline std::string ScriptClassName(Animatable* value) {
     if (!scriptName.empty()) {
         return scriptName;
     }
-    return WideToUtf8(value->ClassName().data());
+    return SanitizeScriptName(WideToUtf8(value->ClassName().data()));
 }
 
 // The script-visible MAXClass name can differ from ClassDesc::InternalName()
@@ -92,7 +105,7 @@ inline std::string MaxScriptVisibleClassName(
     if (maxClass && maxClass->name) {
         const MCHAR* value = maxClass->name->to_string();
         if (value && *value) {
-            return WideToUtf8(value);
+            return SanitizeScriptName(WideToUtf8(value));
         }
     }
     ClassDesc* descriptor = DllDir::GetInstance().ClassDir().FindClass(
@@ -112,7 +125,7 @@ inline std::string MaxScriptVisibleClassName(Animatable* value) {
 inline std::string NodeClassName(INode* node) {
     ObjectState os = node->EvalWorldState(GetCOREInterface()->GetTime());
     if (os.obj) {
-        return WideToUtf8(os.obj->ClassName().data());
+        return SanitizeScriptName(WideToUtf8(os.obj->ClassName().data()));
     }
     return "Unknown";
 }

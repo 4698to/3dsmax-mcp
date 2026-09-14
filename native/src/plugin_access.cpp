@@ -80,7 +80,7 @@ ClassDesc* FindClass(const json& p) {
 json Identity(ClassDesc* cd) {
     json result = ClassRef(cd->SuperClassID(), cd->ClassID());
     result["name"] = ScriptClassName(cd);
-    result["label"] = WideToUtf8(cd->ClassName());
+    result["label"] = SanitizeScriptName(WideToUtf8(cd->ClassName()));
     result["category"] = WideToUtf8(cd->Category());
     result["plugin"] = nullptr;
     auto& dir = DllDir::GetInstance();

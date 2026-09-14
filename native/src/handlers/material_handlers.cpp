@@ -295,12 +295,12 @@ std::string NativeHandlers::AssignMaterial(const std::string& params, MCPBridgeG
         ip->RedrawViews(t);
 
         json result;
-        result["message"] = "Created " + WideToUtf8(mtl->ClassName().data()) + " \"" +
+        result["message"] = "Created " + SanitizeScriptName(WideToUtf8(mtl->ClassName().data())) + " \"" +
                             WideToUtf8(mtl->GetName().data()) + "\" and assigned to " +
                             std::to_string(assignCount) + " object(s)";
         result["material"] = {
             {"name", WideToUtf8(mtl->GetName().data())},
-            {"class", WideToUtf8(mtl->ClassName().data())},
+            {"class", SanitizeScriptName(WideToUtf8(mtl->ClassName().data()))},
             {"requestedClass", matClass},
         };
         result["assigned"] = assigned;
@@ -342,7 +342,7 @@ std::string NativeHandlers::SetMaterialProperty(const std::string& params, MCPBr
             result["value"] = value;
             result["material"] = {
                 {"name", WideToUtf8(mtl->GetName().data())},
-                {"class", WideToUtf8(mtl->ClassName().data())},
+                {"class", SanitizeScriptName(WideToUtf8(mtl->ClassName().data()))},
                 {"sub_material_index", subMatIndex},
             };
             return result.dump();
@@ -431,7 +431,7 @@ std::string NativeHandlers::SetMaterialProperties(const std::string& params, MCP
                             WideToUtf8(mtl->GetName().data());
         result["material"] = {
             {"name", WideToUtf8(mtl->GetName().data())},
-            {"class", WideToUtf8(mtl->ClassName().data())},
+            {"class", SanitizeScriptName(WideToUtf8(mtl->ClassName().data()))},
             {"sub_material_index", subMatIndex},
         };
         result["propertiesSet"] = okList;
