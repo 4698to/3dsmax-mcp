@@ -60,6 +60,10 @@ def _ms_path(p: Path) -> str:
 def _material_slot_hints(material_class: str) -> dict[str, str]:
     """Return compact map-class hints by material class."""
     cls = material_class.lower()
+    if cls in {"fstorm", "fstorm_legacy", "fstormpbr", "fstorm_pbr"}:
+        return {"preferredBitmapClass": "FStormBitmap", "normalHelperClass": "",
+                "bumpHelperClass": "", "normalMode": "FStormBitmap.normal_map=true",
+                "compositeMultiplyClass": "FStormMix", "compositeMultiplyMode": "mix_mod=3"}
     if cls.lstrip("_") in {"corona", "coronaphysicalmtl", "coronamtl", "coronalegacymtl"}:
         return {"preferredBitmapClass": "Bitmaptexture", "normalHelperClass": "CoronaNormal",
                 "bumpHelperClass": "", "channelPickerClass": "ColorCorrection"}

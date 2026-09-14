@@ -241,6 +241,12 @@ def _group_texture_files_for_pbr(
 
 def _renderer_from_material_class(material_class: str) -> str | None:
     class_lower = (material_class or "").strip().lower()
+    if class_lower in {"fstorm", "fstorm_legacy"}:
+        return "fstorm"
+    if class_lower in {"fstormpbr", "fstorm_pbr"}:
+        return "fstorm_pbr"
+    if class_lower.startswith("fstorm"):
+        return None
     # Resolve before Autodesk PhysicalMaterial's broad legacy alias below.
     if class_lower in {"corona", "corona_physical", "coronaphysicalmtl", "_coronaphysicalmtl"}:
         return "corona"

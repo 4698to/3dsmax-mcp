@@ -24,6 +24,31 @@ PLUGIN_MANIFEST_KEY_PROPERTY_LIMIT = 6
 
 
 PLUGIN_OVERLAYS: dict[str, dict[str, Any]] = {
+    "fstorm": {
+        "name": "FStorm",
+        "aliases": ["fstorm", "fstorm render", "fstormrender"],
+        "markers": ["fstorm"],
+        "entry_classes": ["FStorm", "FStormPBR", "FStormBitmap", "FStormFrontBack", "FStormLight", "FStormSunLight", "FStormCamera"],
+        "workflow_tools": [
+            "inspect_plugin_class", "inspect_plugin_instance", "get_material_slots",
+            "inspect_material_network", "create_material_from_textures", "palette_laydown", "smart_import",
+        ],
+        "recipes": [
+            "Inspect the installed FStorm class and instance before writing version-sensitive properties; use schema_version=2 where PB2 coverage is available.",
+            "Use material_class=FStorm for legacy materials or FStormPBR for metalness workflows in texture-folder materials, palette laydown and smart import. FStormPBR requires an installed version exposing that class.",
+            "For Multi/Sub-Object materials, traverse sub-materials and nested maps before inspecting diffuse_tex; deduplicate shared references.",
+            "For FrontBack edits, snapshot the original inputs and their owner slots before rewiring. Resolve named inputs from live inspection and reject cycles; swap each shared FrontBack only once.",
+            "FStorm 2.0.0Z exposes bitmap.FStormBitmap.reloadBitmap(). Inspect the published interface on other builds; use it instead of clearing filenames. FrontBack exposes texture1/texture2 and texture1_on/texture2_on.",
+        ],
+        "gotchas": [
+            "Untargeted FStormSunLight uses hour, month, latitude and north_direction. Its node transform alone does not establish the solar emission direction. Automatic sun conversion is not provided.",
+            "Switching a duplicate sun to targeted is a conversion hypothesis, not proof that the solar direction was baked. Verify the solved direction before any conversion.",
+            "Create an empty FStormBitmap without assigning an empty filename. A filename-poke reload workaround is unverified; never clear paths as an automatic reload operation.",
+            "Do not assume FrontBack slot indices or connect a wrapper to itself. Preserve shared maps and undefined inputs.",
+            "FStorm renderer power is not a verified universal conversion to Corona intensity or photometric units.",
+            "FStormCamera uses targ_dist, while FStormLight and FStormSunLight expose target_distance. Inspect the actual target reference rather than inferring its name.",
+        ],
+    },
     "tyflow": {
         "name": "tyFlow",
         "aliases": ["tyflow", "ty flow"],
