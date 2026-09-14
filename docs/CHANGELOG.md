@@ -4,11 +4,14 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-- Added FStorm legacy and FStormPBR material routes for texture folders, palette laydown, smart import and shell-material construction.
-- Added FStorm plane/disc/sphere lighting and solar sun creation, inspection and guarded edits for power, color, size, visibility, shadows and solar position.
-- Added FStorm plugin discovery guidance covering nested/shared material graphs, FrontBack inputs, the published bitmap reload method, cameras and native lighting controls.
-- Added offline material routing regressions and a reproducible, non-rendering FStorm batch acceptance script.
-- Added offline lighting regressions and disposable live acceptance checks for emitter bounds, solar settings and stale/batch/target guards.
+## [1.7.1] — 2026-09-14
+
+- Added FStorm and FStormPBR material workflows, area lights, solar sun controls and cropped IPR capture.
+- Added Windows window capture for agent viewports and FStorm, V-Ray and Corona frame buffers without desktop occlusion.
+- Fixed plugin class-name aliases across discovery, lookup and material inspection.
+- Fixed Phoenix detection, including false positives from Octane compatibility maps.
+- Fixed FStorm palette warnings and stale light guards.
+- Fixed spline tangent overshoot with bounded handles and backtracking checks.
 
 ## [1.7.0] — 2026-09-13
 
