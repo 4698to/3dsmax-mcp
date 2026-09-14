@@ -70,7 +70,7 @@ static std::string ParamName(const ParamDef& pd, ParamID pid) {
 }
 
 static std::string ClassName(MtlBase* base) {
-    return base ? WideToUtf8(base->ClassName().data()) : "";
+    return base ? SanitizeScriptName(WideToUtf8(base->ClassName().data())) : "";
 }
 
 static std::string BaseName(MtlBase* base) {

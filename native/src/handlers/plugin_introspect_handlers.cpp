@@ -281,7 +281,7 @@ static json DescribeSubAnims(Animatable* anim, int depth, int maxDepth) {
 
         Animatable* child = anim->SubAnim(i);
         if (child) {
-            sub["class"] = WideToUtf8(child->ClassName().data());
+            sub["class"] = SanitizeScriptName(WideToUtf8(child->ClassName().data()));
             if (depth < maxDepth - 1) {
                 json childSubs = DescribeSubAnims(child, depth + 1, maxDepth);
                 if (!childSubs.empty()) sub["children"] = childSubs;
@@ -340,9 +340,9 @@ std::string NativeHandlers::DiscoverClasses(const std::string& params, MCPBridge
                 if (filterSID != 0 && cd->SuperClassID() != filterSID) continue;
 
                 std::string className = cd->ClassName()
-                    ? WideToUtf8(cd->ClassName()) : "";
+                    ? SanitizeScriptName(WideToUtf8(cd->ClassName())) : "";
                 std::string internalName = cd->InternalName()
-                    ? WideToUtf8(cd->InternalName()) : "";
+                    ? SanitizeScriptName(WideToUtf8(cd->InternalName())) : "";
 
                 // Filter by pattern
                 if (!filterPattern.empty()) {
@@ -414,9 +414,9 @@ std::string NativeHandlers::IntrospectClass(const std::string& params, MCPBridge
             throw std::runtime_error("Class not found: " + className);
 
         json result;
-        result["className"] = cd->ClassName() ? WideToUtf8(cd->ClassName()) : className;
+        result["className"] = cd->ClassName() ? SanitizeScriptName(WideToUtf8(cd->ClassName())) : className;
         if (cd->InternalName())
-            result["internalName"] = WideToUtf8(cd->InternalName());
+            result["internalName"] = SanitizeScriptName(WideToUtf8(cd->InternalName()));
         result["classID"] = json::array({
             (unsigned int)cd->ClassID().PartA(),
             (unsigned int)cd->ClassID().PartB()
@@ -499,7 +499,7 @@ std::string NativeHandlers::IntrospectInstance(const std::string& params, MCPBri
         if (!obj)
             throw std::runtime_error("Cannot evaluate object: " + objName);
 
-        result["class"] = WideToUtf8(obj->ClassName().data());
+        result["class"] = SanitizeScriptName(WideToUtf8(obj->ClassName().data()));
         result["classID"] = json::array({
             (unsigned int)obj->ClassID().PartA(),
             (unsigned int)obj->ClassID().PartB()
@@ -624,7 +624,7 @@ std::string NativeHandlers::IntrospectInstance(const std::string& params, MCPBri
         // FPInterfaces on the live object
         result["interfaces"] = json::array();
         // Try ClassDesc2 interfaces first
-        ClassDesc* cd = FindClassDescByName(WideToUtf8(obj->ClassName().data()));
+        ClassDesc* cd = DllDir::GetInstance().ClassDir().FindClass(obj->SuperClassID(), obj->ClassID());
         ClassDesc2* cd2 = cd ? dynamic_cast<ClassDesc2*>(cd) : nullptr;
         if (cd2) {
             for (int i = 0; i < cd2->NumInterfaces(); i++) {
@@ -651,7 +651,7 @@ std::string NativeHandlers::IntrospectInstance(const std::string& params, MCPBri
 
                 json modj;
                 modj["name"] = WideToUtf8(mod->GetName(false).data());
-                modj["class"] = WideToUtf8(mod->ClassName().data());
+                modj["class"] = SanitizeScriptName(WideToUtf8(mod->ClassName().data()));
                 modj["enabled"] = mod->IsEnabled() ? true : false;
                 modj["classID"] = json::array({
                     (unsigned int)mod->ClassID().PartA(),
@@ -685,7 +685,7 @@ std::string NativeHandlers::IntrospectInstance(const std::string& params, MCPBri
         if (mtl) {
             json matj;
             matj["name"] = WideToUtf8(mtl->GetName().data());
-            matj["class"] = WideToUtf8(mtl->ClassName().data());
+            matj["class"] = SanitizeScriptName(WideToUtf8(mtl->ClassName().data()));
             matj["numSubMtls"] = mtl->NumSubMtls();
             matj["numSubTexmaps"] = mtl->NumSubTexmaps();
 

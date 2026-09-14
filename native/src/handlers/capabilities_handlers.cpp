@@ -132,7 +132,7 @@ void DetectKnownPlugin(
 
         if (name == "tyflow") tyFlow = true;
         if (MatchesAny(name, {"railclonepro", "railclone"})) railClone = true;
-        // Phoenix FD registers every class under a PHX* or PhoenixFD* prefix
+        // Phoenix FD registers several classes under a PHX* or PhoenixFD* prefix
         // (PHXSimulator, PHXFoam, PhoenixFDPartSys, PhoenixFD_Force, ...).
         // The single legacy name is kept for older Phoenix builds.
         if (name == "phoenixfdliquid" ||

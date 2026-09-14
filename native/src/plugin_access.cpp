@@ -58,6 +58,7 @@ ClassDesc* FindClass(const json& p) {
     if (p.contains("class_ref") && !p["class_ref"].is_null()) return Descriptor(p["class_ref"]);
     const auto name = Lower(p.value("class_name", ""));
     if (name.empty()) Fail("BAD_PARAM", "class_ref or class_name is required.");
+    const auto wideName = Utf8ToWide(name);
     ClassDesc* found = nullptr;
     auto& directory=ClassDirectory::GetInstance();
     for(int s=0;s<directory.Count();++s) {
@@ -67,8 +68,9 @@ ClassDesc* FindClass(const json& p) {
         // not match the live directory on Max 2027.
         for(int i=list.GetFirst(ACC_ALL);i!=-1;i=list.GetNext(ACC_ALL)) {
             auto* cd=list[i].CD(); if(!cd) continue;
-            if(Lower(ScriptClassName(cd))!=name&&Lower(WideToUtf8(list[i].ClassName().data()))!=name&&
-                Lower(WideToUtf8(list[i].NonLocalizedClassName().data()))!=name) continue;
+            if(!MatchesClassName(wideName, cd->InternalName()) &&
+                !MatchesClassName(wideName, list[i].ClassName().data()) &&
+                !MatchesClassName(wideName, list[i].NonLocalizedClassName().data())) continue;
             if(found&&(found->ClassID()!=cd->ClassID()||found->SuperClassID()!=cd->SuperClassID()))
                 Fail("AMBIGUOUS","Class name is ambiguous; supply class_ref.");
             found=list[i].FullCD();

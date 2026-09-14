@@ -48,14 +48,22 @@ inline std::wstring Utf8ToWide(const std::string& s) {
 // Some plugins prefix a control character to force their class to the top of
 // 3ds Max's alphabetical browsers (Corona registers "\rCoronaPhysicalMtl").
 // MAXScript never exposes those raw bytes: `(classOf m) as string` reports
-// _CoronaPhysicalMtl. Mirror that substitution so one class has one name
-// across every handler, and so the value stays a valid JSON string.
+// _CoronaPhysicalMtl. Mirror that substitution in class-name outputs.
+// JSON escaping itself is handled by the serializer.
 inline std::string SanitizeScriptName(std::string value) {
     for (char& ch : value) {
         const unsigned char byte = static_cast<unsigned char>(ch);
         if (byte < 0x20 || byte == 0x7F) ch = '_';
     }
     return value;
+}
+
+// Accept both SDK labels and the control-character aliases returned to clients.
+inline bool MatchesClassName(const std::wstring& requested, const MCHAR* candidate) {
+    if (!candidate || !*candidate) return false;
+    if (_wcsicmp(requested.c_str(), candidate) == 0) return true;
+    const auto sanitized = Utf8ToWide(SanitizeScriptName(WideToUtf8(candidate)));
+    return _wcsicmp(requested.c_str(), sanitized.c_str()) == 0;
 }
 
 // MAXScript's `(classOf value) as string` exposes the script-facing class
@@ -512,6 +520,7 @@ inline Animatable* ResolveSubAnimPath(INode* node, const std::string& path) {
 // ── Find ClassDesc by class name (iterates all loaded plugins) ──
 inline ClassDesc* FindClassDescByName(const std::string& className, SClass_ID superID = 0) {
     std::wstring wname = Utf8ToWide(className);
+    ClassDesc* found = nullptr;
     auto& dir = DllDir::GetInstance();
     int numDlls = dir.Count();
     for (int d = 0; d < numDlls; d++) {
@@ -521,16 +530,17 @@ inline ClassDesc* FindClassDescByName(const std::string& className, SClass_ID su
             ClassDesc* cd = dll[c];
             if (!cd) continue;
             if (superID != 0 && cd->SuperClassID() != superID) continue;
-            const MCHAR* cn = cd->ClassName();
-            if (cn && _wcsicmp(cn, wname.c_str()) == 0)
-                return cd;
-            // Also try internal name (some plugins differ)
-            const MCHAR* intName = cd->InternalName();
-            if (intName && _wcsicmp(intName, wname.c_str()) == 0)
-                return cd;
+            if (!MatchesClassName(wname, cd->ClassName()) &&
+                !MatchesClassName(wname, cd->InternalName()) &&
+                !MatchesClassName(wname, cd->NonLocalizedClassName())) continue;
+            if (found && (found->ClassID() != cd->ClassID() ||
+                          found->SuperClassID() != cd->SuperClassID()))
+                throw std::runtime_error(StructuredErrorPayload(
+                    "AMBIGUOUS", "Class name is ambiguous: " + className));
+            found = cd;
         }
     }
-    return nullptr;
+    return found;
 }
 
 // ── Parse a MAXScript-style value string into typed PB2 value ───

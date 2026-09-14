@@ -79,8 +79,11 @@ static std::vector<std::string> SuggestMaterialClasses(const std::string& token)
             if (!cd || cd->SuperClassID() != MATERIAL_CLASS_ID) continue;
             const MCHAR* candidates[2] = { cd->ClassName(), cd->InternalName() };
             for (const MCHAR* cand : candidates) {
-                if (!cand || _wcsnicmp(cand, wtok.c_str(), tokLen) != 0) continue;
-                std::string s = WideToUtf8(cand);
+                if (!cand) continue;
+                std::string s = SanitizeScriptName(WideToUtf8(cand));
+                const auto alias = Utf8ToWide(s);
+                if (_wcsnicmp(cand, wtok.c_str(), tokLen) != 0 &&
+                    _wcsnicmp(alias.c_str(), wtok.c_str(), tokLen) != 0) continue;
                 bool dup = false;
                 for (const std::string& existing : out) {
                     if (existing == s) { dup = true; break; }
