@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "tool_count": 172,
+  "tool_count": 174,
   "starter_tools": [
     "query_scene",
     "get_session_context",
@@ -265,7 +265,7 @@
     {
       "name": "Specialty",
       "hint": "MCG, Data Channel, tyFlow, RailClone, etc.",
-      "tool_count": 44,
+      "tool_count": 46,
       "categories": [
         {
           "name": "Data Channel",
@@ -311,7 +311,9 @@
         {
           "name": "RailClone",
           "tools": [
-            "get_railclone_style_graph"
+            "get_railclone_output",
+            "get_railclone_style",
+            "set_railclone_style"
           ]
         },
         {
@@ -5703,8 +5705,8 @@
       "starter": false
     },
     {
-      "name": "get_railclone_style_graph",
-      "description": "Read RailClone style-editor graph data from exposed arrays/interfaces.",
+      "name": "get_railclone_output",
+      "description": "Inspect RailClone getXMLOutput at the current frame, without rendering.",
       "category": "RailClone",
       "group": "Specialty",
       "module": "railclone",
@@ -5714,40 +5716,80 @@
           "name": {
             "type": "string"
           },
-          "include_bases": {
-            "type": "boolean"
-          },
-          "include_segments": {
-            "type": "boolean"
-          },
-          "include_parameters": {
-            "type": "boolean"
-          },
-          "include_raw_style_desc": {
-            "type": "boolean"
-          },
-          "max_bases": {
+          "handle": {
             "type": "integer"
           },
-          "max_segments": {
+          "offset": {
             "type": "integer"
           },
-          "max_parameters": {
+          "limit": {
             "type": "integer"
           },
-          "max_style_desc_chars": {
+          "include_xml": {
+            "type": "boolean"
+          }
+        }
+      },
+      "example": {},
+      "risk": "advanced",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "get_railclone_style",
+      "description": "Read complete RailClone style XML and a token for guarded replacement.",
+      "category": "RailClone",
+      "group": "Specialty",
+      "module": "railclone",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "integer"
+          }
+        }
+      },
+      "example": {},
+      "risk": "advanced",
+      "routing": "python",
+      "starter": false
+    },
+    {
+      "name": "set_railclone_style",
+      "description": "Replace a RailClone graph using setXMLStyle and return actual XML readback.",
+      "category": "RailClone",
+      "group": "Specialty",
+      "module": "railclone",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "xml": {
+            "type": "string"
+          },
+          "expected_style": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
             "type": "integer"
           }
         },
         "required": [
-          "name"
+          "xml",
+          "expected_style"
         ]
       },
       "example": {
-        "name": "$first_object"
+        "xml": "",
+        "expected_style": ""
       },
       "risk": "advanced",
-      "routing": "maxscript",
+      "routing": "python",
       "starter": false
     },
     {

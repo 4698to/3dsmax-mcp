@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [1.7.2] — 2026-09-15
+
+- Replaced `get_railclone_style_graph` with complete XML style read/write and generated-output tools for RailClone 7.3.5+.
+- Added guarded, undoable RailClone style replacement and output inspection for source segments, transforms, bounds, and tags.
+- Added RailClone modeling guidance for single-footprint buildings, clipping, and embedded geometry.
 - Added a guarded ProBoolean fallback for Boolean operations in Max 2023, with explicit backend selection.
 
 ## [1.7.1] — 2026-09-14

@@ -105,15 +105,17 @@ PLUGIN_OVERLAYS: dict[str, dict[str, Any]] = {
         "capability_key": "railClone",
         "entry_classes": ["RailClone_Pro"],
         "workflow_tools": [
-            "get_railclone_style_graph",
+            "get_railclone_style",
+            "set_railclone_style",
+            "get_railclone_output",
         ],
         "recipes": [
-            "Start with get_railclone_style_graph to read base/segment/parameter graph data from the live generator.",
-            "Use inspect_plugin_instance and inspect_properties for full property readback before changing rules.",
+            "Read get_railclone_style, edit its XML, then call set_railclone_style with the returned style_token as expected_style.",
+            "Verify generated placements, source segments, transforms, bounds and tags with get_railclone_output.",
         ],
         "gotchas": [
-            "RailClone's internal style editor graph is only partially reflectable; getStyleDesc() may be empty even when the generator is valid.",
-            "Treat get_railclone_style_graph as an exposed-surface reconstruction, not a full UI-equivalent graph export.",
+            "Requires RailClone 7.3.5 or newer XML methods; style XML does not package source geometry or materials.",
+            "Writes adopt a staged RailClone base in one undo step, preserving the scene node and modifier stack. Instanced bases and master/slave styles are refused.",
         ],
     },
     "phoenixfd": {

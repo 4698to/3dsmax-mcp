@@ -159,6 +159,15 @@ and `capture_tyflow_editor` for foreign flows.
 ### Forest Pack
 - `scatter_forest_pack` — surfaces + source geometry; auto footprint per variant
 
+### RailClone (7.3.5+)
+
+Read [railclone.md](railclone.md) for XML authoring, single-footprint models, source binding, and embedding.
+
+- `get_railclone_style` — complete XML and `style_token`; target by unique name or handle.
+- `set_railclone_style` — replace XML, passing the token as `expected_style`. One undo step adopts a staged RailClone base; node identity and modifiers remain. Instanced bases and linked master/slave styles are refused.
+- `get_railclone_output` — paged generated items with source segments, native transform/bounds strings and tags; `include_xml=true` also returns the complete output XML.
+- Keep XML node IDs, connections and unknown fields intact when editing. Style XML does not bundle source geometry/materials. Use output inspection to verify generated results.
+
 ### Controllers & wiring
 - `assign_controller`, `inspect_controller`, `inspect_track_view`, `set_controller_props`, `add_controller_target`
 - `list_wireable_params`, `wire_params`, `get_wired_params`, `unwire_params`

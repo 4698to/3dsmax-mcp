@@ -380,7 +380,9 @@ and existing procedural skies use the provider's dome or environment binding.
 
 | Tool | Description |
 |------|-------------|
-| `get_railclone_style_graph` | Read style-editor bases, segments, and parameters |
+| `get_railclone_style` | Read complete style XML and edit token (RailClone 7.3.5+) |
+| `set_railclone_style` | Replace style XML with guarded, undoable adoption |
+| `get_railclone_output` | Read generated segments, transforms, bounds, and tags |
 
 ### Scripting & diagnostics
 

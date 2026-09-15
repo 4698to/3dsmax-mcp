@@ -9,7 +9,7 @@ from typing import Any
 
 from maxmcp.tools.bridge import get_bridge_status
 from maxmcp.tools.plugins import discover_plugin_surface, get_plugin_manifest, inspect_plugin_class, inspect_plugin_instance
-from maxmcp.tools.railclone import get_railclone_style_graph
+from maxmcp.tools.railclone import get_railclone_style
 
 
 def _load_json(raw: str) -> dict[str, Any]:
@@ -48,26 +48,17 @@ def _choose_class(manifest: dict[str, Any], fallback_class: str) -> str:
 
 
 def _run_railclone_extension(object_name: str) -> bool:
-    step = "get_railclone_style_graph"
+    step = "get_railclone_style"
     try:
-        graph = _load_json(
-            get_railclone_style_graph(
-                object_name,
-                include_bases=True,
-                include_segments=True,
-                include_parameters=True,
-                include_raw_style_desc=True,
-                max_style_desc_chars=8000,
-            )
-        )
+        graph = get_railclone_style(name=object_name)
     except Exception as exc:  # pragma: no cover - live smoke path
         _fail(step, str(exc))
         return False
 
     checks = [
         _expect(graph.get("name") == object_name, step, f"returned object name {graph.get('name')!r}"),
-        _expect(int(graph.get("baseCount", 0)) >= 1, step, "expected at least one RailClone base"),
-        _expect(int(graph.get("segmentCount", 0)) >= 1, step, "expected at least one RailClone segment"),
+        _expect(bool(graph.get("xml")), step, "expected complete style XML"),
+        _expect(bool(graph.get("style_token")), step, "expected a guarded edit token"),
     ]
     _print_result(step, graph)
     return all(checks)

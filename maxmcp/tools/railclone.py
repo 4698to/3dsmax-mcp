@@ -1,412 +1,249 @@
+"""RailClone 7.3.5 XML style and evaluated-output access."""
 from __future__ import annotations
 
-import json
+import base64
+import re
+import xml.etree.ElementTree as ET
 from typing import Any
 
-from ..helpers.maxscript import safe_string
-
+from ..helpers.mesh import integer
 from ..server import client, mcp
 
 
-def _decode(value: str) -> str:
-    return value.replace("<pipe>", "|")
+MAX_XML_CHARS = 4_000_000
+TOKEN = re.compile(r"[0-9A-F]{2}(?:-[0-9A-F]{2}){31}")
 
 
-def _to_int(value: str, default: int = 0) -> int:
+class RailCloneError(RuntimeError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.retryable = code in {"USER_BUSY", "STALE_STYLE"}
+
+
+def _xml(text: str, root: str) -> ET.Element:
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("XML must be a nonempty string")
+    if len(text) > MAX_XML_CHARS:
+        raise ValueError(f"XML exceeds {MAX_XML_CHARS} characters; partial styles are not accepted")
+    if re.search(r"<!\s*(?:DOCTYPE|ENTITY)\b", text, re.I):
+        raise ValueError("XML DTDs and entity declarations are not supported")
     try:
-        return int(value)
-    except Exception:
-        return default
+        element = ET.fromstring(text)
+    except ET.ParseError as exc:
+        raise ValueError(f"Invalid XML: {exc}") from exc
+    if element.tag != root:
+        raise ValueError(f"Expected <{root}> XML, got <{element.tag}>")
+    return element
 
 
-def _to_float(value: str, default: float = 0.0) -> float:
+_FUNCTIONS = r'''
+fn rcEncode text = (dotNetClass "System.Convert").ToBase64String ((dotNetClass "System.Text.Encoding").UTF8.GetBytes text)
+fn rcDecode text = (dotNetClass "System.Text.Encoding").UTF8.GetString ((dotNetClass "System.Convert").FromBase64String text)
+fn rcHash text = (
+    local sha = (dotNetClass "System.Security.Cryptography.SHA256").Create()
+    local digest = (dotNetClass "System.BitConverter").ToString (sha.ComputeHash ((dotNetClass "System.Text.Encoding").UTF8.GetBytes text))
+    sha.Dispose(); digest as string
+)
+fn rcApi base method = (
+    local api = getInterface base #railclone
+    if api == undefined do throw "NOT_RAILCLONE: target has no RailClone interface"
+    if not isProperty api method do throw "XML_API_UNAVAILABLE: RailClone 7.3.5 or newer is required"
+    api
+)
+fn rcToken obj xml = rcHash ((formattedPrint ((getHandleByAnim obj) as integer64) format:"d") + "|" + (formattedPrint ((getHandleByAnim obj.baseObject) as integer64) format:"d") + "|" + xml)
+fn rcResult obj xml token = (
+    "RCXML|" + (formattedPrint ((getHandleByAnim obj) as integer64) format:"d") + "|" + (rcEncode obj.name) + "|" + token + "|" + (rcEncode xml)
+)
+'''
+
+
+def _target(name: str, handle: int) -> str:
+    if not isinstance(name, str) or "\x00" in name:
+        raise ValueError("name must be a string without NUL characters")
+    integer(handle, "handle", low=0, high=2**63 - 1)
+    # Keep Unicode, quotes and newlines out of MAXScript syntax.
+    encoded = base64.b64encode(name.encode("utf-8")).decode("ascii")
+    code = f'local wantedName = rcDecode "{encoded}"\nlocal obj = undefined\n'
+    if handle:
+        code += f'obj = getAnimByHandle {handle}\n'
+        code += 'if not isValidNode obj do throw "NOT_FOUND: node handle is no longer valid"\n'
+        if name:
+            code += 'if obj.name != wantedName do throw "NODE_REF_MISMATCH: handle and name disagree"\n'
+    elif name:
+        code += 'local matches = getNodeByName wantedName exact:true all:true\n'
+        code += 'if matches.count == 0 do throw "NOT_FOUND: node not found"\n'
+        code += 'if matches.count != 1 do throw "AMBIGUOUS: use a handle for duplicate node names"\nobj = matches[1]\n'
+    else:
+        raise ValueError("Provide a RailClone node name or handle")
+    return code
+
+
+def _run(body: str) -> dict[str, Any]:
+    response = client.send_command('(' + _FUNCTIONS + '\ntry (\n' + body +
+                                   '\n) catch ("RCERROR|" + (getCurrentException() as string))\n)')
+    if response.get("error") or response.get("ok") is False:
+        error = response.get("error") or {}
+        if isinstance(error, dict):
+            raise RailCloneError(error.get("code", "BRIDGE_ERROR"), error.get("message", str(error)))
+        raise RailCloneError("BRIDGE_ERROR", str(error))
+    raw = response.get("result")
+    if isinstance(raw, str) and raw.startswith("RCERROR|"):
+        message = raw.split("|", 1)[1]
+        match = re.search(r"\b([A-Z][A-Z_]+):", message)
+        raise RailCloneError(match[1] if match else "RAILCLONE_ERROR", message)
+    if not isinstance(raw, str) or not raw.startswith("RCXML|"):
+        raise RailCloneError("INVALID_READBACK", f"RailClone returned no XML readback: {str(raw)[:250]}")
     try:
-        return float(value)
-    except Exception:
-        return default
+        _, handle, name, token, xml = raw.split("|", 4)
+        return {"handle": int(handle), "name": base64.b64decode(name, validate=True).decode("utf-8"),
+                "style_token": token, "xml": base64.b64decode(xml, validate=True).decode("utf-8")}
+    except (ValueError, UnicodeError) as exc:
+        raise RailCloneError("INVALID_READBACK", "Incomplete XML response; inspect before retrying") from exc
 
 
-def _to_bool(value: str, default: bool = False) -> bool:
-    lower = (value or "").strip().lower()
-    if lower in {"true", "1", "yes", "on"}:
-        return True
-    if lower in {"false", "0", "no", "off"}:
-        return False
-    return default
-
-
-def _parse_style_graph_lines(raw: str, fallback_name: str) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "name": fallback_name,
-        "class": "",
-        "style": "",
-        "styleLength": 0,
-        "styleDescLength": 0,
-        "styleDesc": "",
-        "baseCount": 0,
-        "segmentCount": 0,
-        "parameterCount": 0,
-        "bases": [],
-        "segments": [],
-        "parameters": [],
-        "graph": {"nodes": [], "edges": []},
-        "warnings": [],
-    }
-
-    for line in raw.splitlines():
-        parts = line.split("|")
-        if not parts:
-            continue
-        tag = parts[0]
-
-        if tag == "HDR" and len(parts) >= 6:
-            result["name"] = _decode(parts[1])
-            result["class"] = _decode(parts[2])
-            result["style"] = _decode(parts[3])
-            result["styleLength"] = _to_int(parts[4])
-            result["styleDescLength"] = _to_int(parts[5])
-        elif tag == "DESC" and len(parts) >= 2:
-            result["styleDesc"] = _decode(parts[1])
-        elif tag == "META" and len(parts) >= 3:
-            key = parts[1]
-            val = _to_int(parts[2])
-            if key == "baseCount":
-                result["baseCount"] = val
-            elif key == "segmentCount":
-                result["segmentCount"] = val
-            elif key == "parameterCount":
-                result["parameterCount"] = val
-        elif tag == "BA" and len(parts) >= 10:
-            result["bases"].append(
-                {
-                    "index": _to_int(parts[1]),
-                    "id": _decode(parts[2]),
-                    "type": _to_int(parts[3]),
-                    "name": _decode(parts[4]),
-                    "node": _decode(parts[5]),
-                    "full": _to_bool(parts[6]),
-                    "start": _to_float(parts[7]),
-                    "length": _to_float(parts[8]),
-                    "description": _decode(parts[9]),
-                }
-            )
-        elif tag == "SG" and len(parts) >= 16:
-            result["segments"].append(
-                {
-                    "index": _to_int(parts[1]),
-                    "id": _decode(parts[2]),
-                    "name": _decode(parts[3]),
-                    "node": _decode(parts[4]),
-                    "material": _to_int(parts[5]),
-                    "materialRange": _to_int(parts[6]),
-                    "renderable": _to_bool(parts[7]),
-                    "bend": _to_bool(parts[8]),
-                    "slice": _to_bool(parts[9]),
-                    "nesting": _to_bool(parts[10]),
-                    "sliceSourceIndex": _to_int(parts[11]),
-                    "position": _decode(parts[12]),
-                    "rotation": _decode(parts[13]),
-                    "scale": _decode(parts[14]),
-                    "mappingChannels": _decode(parts[15]),
-                }
-            )
-        elif tag == "PA" and len(parts) >= 14:
-            result["parameters"].append(
-                {
-                    "index": _to_int(parts[1]),
-                    "id": _decode(parts[2]),
-                    "name": _decode(parts[3]),
-                    "type": _to_int(parts[4]),
-                    "typeLabel": _decode(parts[5]),
-                    "limited": _to_bool(parts[6]),
-                    "value": _decode(parts[7]),
-                    "min": _decode(parts[8]),
-                    "max": _decode(parts[9]),
-                    "selector": _decode(parts[10]),
-                    "description": _decode(parts[11]),
-                    "modified": _to_bool(parts[12]),
-                    "retain": _to_int(parts[13]),
-                }
-            )
-        elif tag == "WARN" and len(parts) >= 2:
-            result["warnings"].append([_decode(p) for p in parts[1:]])
-
-    if result["baseCount"] <= 0:
-        result["baseCount"] = len(result["bases"])
-    if result["segmentCount"] <= 0:
-        result["segmentCount"] = len(result["segments"])
-    if result["parameterCount"] <= 0:
-        result["parameterCount"] = len(result["parameters"])
-
-    root_id = f"railclone:{result['name']}"
-    nodes = [{"id": root_id, "type": "railclone", "name": result["name"]}]
-    edges = []
-
-    base_id_by_index: dict[int, str] = {}
-    for base in result["bases"]:
-        node_id = f"base:{base.get('id') or base.get('index')}"
-        base_id_by_index[int(base.get("index", 0))] = node_id
-        nodes.append({"id": node_id, "type": "base", "name": base.get("name", ""), "node": base.get("node", "")})
-        edges.append({"from": root_id, "to": node_id, "type": "has_base"})
-
-    for segment in result["segments"]:
-        node_id = f"segment:{segment.get('id') or segment.get('index')}"
-        nodes.append({"id": node_id, "type": "segment", "name": segment.get("name", ""), "node": segment.get("node", "")})
-        edges.append({"from": root_id, "to": node_id, "type": "has_segment"})
-        src_index = int(segment.get("sliceSourceIndex", 0))
-        if src_index > 0 and src_index in base_id_by_index:
-            edges.append({"from": base_id_by_index[src_index], "to": node_id, "type": "base_to_segment", "via": "slicesrc"})
-
-    for parameter in result["parameters"]:
-        node_id = f"param:{parameter.get('id') or parameter.get('index')}"
-        nodes.append({"id": node_id, "type": "parameter", "name": parameter.get("name", ""), "paramType": parameter.get("typeLabel", "")})
-        edges.append({"from": root_id, "to": node_id, "type": "has_parameter"})
-
-    result["graph"] = {"nodes": nodes, "edges": edges}
-    has_style_desc_warning = any((item and item[0] == "STYLE_DESC_EMPTY") for item in result["warnings"])
-    if result["styleDescLength"] == 0 and not has_style_desc_warning:
-        result["warnings"].append(
-            [
-                "STYLE_DESC_EMPTY",
-                "RailClone getStyleDesc() returned empty; graph is reconstructed from exposed arrays only.",
-            ]
-        )
+def _style_result(result: dict[str, Any]) -> dict[str, Any]:
+    root = _xml(result["xml"], "scene")
+    result.update(schema=dict(root.attrib), node_count=sum(1 for _ in root.iter("node")))
     return result
 
 
 @mcp.tool()
-def get_railclone_style_graph(
-    name: str,
-    include_bases: bool = True,
-    include_segments: bool = True,
-    include_parameters: bool = True,
-    include_raw_style_desc: bool = False,
-    max_bases: int = 300,
-    max_segments: int = 1000,
-    max_parameters: int = 500,
-    max_style_desc_chars: int = 4000,
-) -> str:
-    """Read RailClone style-editor graph data from exposed arrays/interfaces."""
-    max_b = max(1, int(max_bases))
-    max_s = max(1, int(max_segments))
-    max_p = max(1, int(max_parameters))
-    max_desc = max(1, int(max_style_desc_chars))
+def get_railclone_style(name: str = "", handle: int = 0) -> dict[str, Any]:
+    """Read complete RailClone style XML and a token for guarded replacement.
 
-    maxscript = f"""(
-fn clean s =
-(
-    local t = s as string
-    t = substituteString t "|" "<pipe>"
-    t = substituteString t "\\n" " "
-    t = substituteString t "\\r" ""
-    t
-)
+    Requires RailClone 7.3.5+. Target by unique name or handle; both are cross-checked.
+    XML is verbatim, including nested graphs and unknown fields. No reconstruction
+    or truncation. Pass style_token as set_railclone_style.expected_style.
+    Style XML is graph data, not a portable geometry/material asset package.
+    """
+    result = _run(_target(name, handle) + f'''
+local api = rcApi obj.baseObject #getXMLStyle
+local xml = api.getXMLStyle()
+if xml.count > {MAX_XML_CHARS} do throw "XML_TOO_LARGE: style exceeds the XML response limit"
+rcResult obj xml (rcToken obj xml)
+''')
+    return _style_result(result)
 
-fn arrVal arr idx defaultVal =
-(
-    local v = defaultVal
-    try (if arr != undefined and idx >= 1 and arr.count >= idx do v = arr[idx]) catch ()
-    v
-)
 
-fn maxArrCount arr cur =
-(
-    local out = cur
-    try (if arr != undefined and arr.count > out do out = arr.count) catch ()
-    out
-)
+@mcp.tool()
+def set_railclone_style(
+    xml: str,
+    expected_style: str,
+    name: str = "",
+    handle: int = 0,
+) -> dict[str, Any]:
+    """Replace a RailClone graph using setXMLStyle and return actual XML readback.
 
-fn pTypeLabel t =
-(
-    case t of (
-        0: "int"
-        1: "float"
-        2: "bool"
-        3: "worldUnits"
-        4: "string"
-        default: ("type_" + (t as string))
+    Read first; expected_style is the returned style_token, checked in Max before
+    applying. Requires well-formed <scene> XML. RailClone's Ok means XML acceptance,
+    not graph/geometry correctness; verify generated results with get_railclone_output.
+    setXMLStyle itself is not undoable, so the edit is staged on a copy of the
+    RailClone base and adopted in one undo step. Node identity, transform, material
+    and modifier stack stay intact; base identity changes. Instanced bases and
+    master/slave style links are refused. Source geometry is not created here.
+    Rejected styles never replace the original base. Maximum XML: 4 million chars.
+    """
+    _xml(xml, "scene")
+    if not isinstance(expected_style, str) or TOKEN.fullmatch(expected_style) is None:
+        raise ValueError("expected_style must be the style_token from get_railclone_style")
+    target = _target(name, handle)
+    encoded = base64.b64encode(xml.encode("utf-8")).decode("ascii")
+    result = _run(target + f'''
+if theHold.Holding() or theHold.IsSuspended() or theHold.SuperLevel() != 0 do throw "USER_BUSY: an undo operation is active"
+local base = obj.baseObject
+local api = rcApi base #setXMLStyle
+rcApi base #getXMLStyle
+local before = api.getXMLStyle()
+if rcToken obj before != "{expected_style}" do throw "STALE_STYLE: RailClone changed; read the style again"
+for n in objects where n != obj do (
+    if n.baseObject == base do throw "SHARED_BASE: make the RailClone base unique before replacing its style"
+    if isProperty n.baseObject #stylelink do (
+        if n.baseObject.stylelink == obj do throw "SHARED_STYLE: this RailClone is a style master"
     )
 )
-
-local n = getNodeByName "{safe_string(name)}"
-if n == undefined then (
-    "__ERROR__|Object not found: {safe_string(name)}"
-) else (
-    local cls = (classof n) as string
-    if (findString (toLower cls) "railclone") == undefined then (
-        "__ERROR__|Object is not RailClone: " + n.name + " (" + cls + ")"
-    ) else (
-        local style = ""
-        try (style = n.style as string) catch ()
-        local styleDesc = ""
-        try (styleDesc = n.railclone.getStyleDesc()) catch ()
-        local out = "HDR|" + (clean n.name) + "|" + (clean cls) + "|" + (clean style) + "|" + (style.count as string) + "|" + (styleDesc.count as string) + "\\n"
-
-        if {str(bool(include_raw_style_desc)).lower()} then (
-            local d = styleDesc
-            if d.count > {max_desc} do d = (substring d 1 {max_desc})
-            out += "DESC|" + (clean d) + "\\n"
-            if styleDesc.count > d.count do out += "WARN|DESC_TRUNCATED|" + (styleDesc.count as string) + "|" + (d.count as string) + "\\n"
-        )
-
-        local baseCount = 0
-        baseCount = maxArrCount n.baid baseCount
-        baseCount = maxArrCount n.batype baseCount
-        baseCount = maxArrCount n.baname baseCount
-        baseCount = maxArrCount n.banode baseCount
-        baseCount = maxArrCount n.bafull baseCount
-        baseCount = maxArrCount n.bastart baseCount
-        baseCount = maxArrCount n.balength baseCount
-        baseCount = maxArrCount n.badesc baseCount
-        out += "META|baseCount|" + (baseCount as string) + "\\n"
-
-        if {str(bool(include_bases)).lower()} then (
-            local bTake = baseCount
-            if bTake > {max_b} then (
-                out += "WARN|BASE_TRUNCATED|" + (baseCount as string) + "|" + ({max_b} as string) + "\\n"
-                bTake = {max_b}
-            )
-            for i = 1 to bTake do (
-                local bId = arrVal n.baid i ""
-                local bType = arrVal n.batype i 0
-                local bName = arrVal n.baname i ""
-                local bNode = arrVal n.banode i undefined
-                local bNodeName = if bNode != undefined then bNode.name else ""
-                local bFull = arrVal n.bafull i false
-                local bStart = arrVal n.bastart i 0.0
-                local bLength = arrVal n.balength i 0.0
-                local bDesc = arrVal n.badesc i ""
-                out += "BA|" + (i as string) + "|" + (clean bId) + "|" + (bType as string) + "|" + (clean bName) + "|" + (clean bNodeName) + "|" + (bFull as string) + "|" + (bStart as string) + "|" + (bLength as string) + "|" + (clean bDesc) + "\\n"
-            )
-        )
-
-        local segCount = 0
-        segCount = maxArrCount n.sid segCount
-        segCount = maxArrCount n.sname segCount
-        segCount = maxArrCount n.sobjnode segCount
-        segCount = maxArrCount n.smaterial segCount
-        segCount = maxArrCount n.smatrange segCount
-        segCount = maxArrCount n.srenderable segCount
-        segCount = maxArrCount n.sbend segCount
-        segCount = maxArrCount n.sslice segCount
-        segCount = maxArrCount n.snesting segCount
-        segCount = maxArrCount n.slicesrc segCount
-        segCount = maxArrCount n.spos segCount
-        segCount = maxArrCount n.srot segCount
-        segCount = maxArrCount n.ssca segCount
-        segCount = maxArrCount n.smapchans segCount
-        out += "META|segmentCount|" + (segCount as string) + "\\n"
-
-        if {str(bool(include_segments)).lower()} then (
-            local sTake = segCount
-            if sTake > {max_s} then (
-                out += "WARN|SEGMENT_TRUNCATED|" + (segCount as string) + "|" + ({max_s} as string) + "\\n"
-                sTake = {max_s}
-            )
-            for i = 1 to sTake do (
-                local sId = arrVal n.sid i ""
-                local sName = arrVal n.sname i ""
-                local sNode = arrVal n.sobjnode i undefined
-                local sNodeName = if sNode != undefined then sNode.name else ""
-                local sMaterial = arrVal n.smaterial i 0
-                local sMatRange = arrVal n.smatrange i 1
-                local sRenderable = arrVal n.srenderable i true
-                local sBend = arrVal n.sbend i false
-                local sSlice = arrVal n.sslice i false
-                local sNesting = arrVal n.snesting i false
-                local sSliceSrc = arrVal n.slicesrc i 0
-                local sPos = arrVal n.spos i [0,0,0]
-                local sRot = arrVal n.srot i [0,0,0]
-                local sScale = arrVal n.ssca i [100,100,100]
-                local sMapChans = arrVal n.smapchans i ""
-                out += "SG|" + (i as string) + "|" + (clean sId) + "|" + (clean sName) + "|" + (clean sNodeName) + "|" + (sMaterial as string) + "|" + (sMatRange as string) + "|" + (sRenderable as string) + "|" + (sBend as string) + "|" + (sSlice as string) + "|" + (sNesting as string) + "|" + (sSliceSrc as string) + "|" + (clean (sPos as string)) + "|" + (clean (sRot as string)) + "|" + (clean (sScale as string)) + "|" + (clean sMapChans) + "\\n"
-            )
-        )
-
-        local pCount = 0
-        pCount = maxArrCount n.paid pCount
-        pCount = maxArrCount n.patype pCount
-        pCount = maxArrCount n.paname pCount
-        pCount = maxArrCount n.palimit pCount
-        pCount = maxArrCount n.paintval pCount
-        pCount = maxArrCount n.paintmin pCount
-        pCount = maxArrCount n.paintmax pCount
-        pCount = maxArrCount n.pafloatval pCount
-        pCount = maxArrCount n.pafloatmin pCount
-        pCount = maxArrCount n.pafloatmax pCount
-        pCount = maxArrCount n.paunitval pCount
-        pCount = maxArrCount n.paunitmin pCount
-        pCount = maxArrCount n.paunitmax pCount
-        pCount = maxArrCount n.paboolval pCount
-        pCount = maxArrCount n.pastrval pCount
-        pCount = maxArrCount n.paselector pCount
-        pCount = maxArrCount n.padesc pCount
-        pCount = maxArrCount n.pamodified pCount
-        pCount = maxArrCount n.paretain pCount
-        out += "META|parameterCount|" + (pCount as string) + "\\n"
-
-        if {str(bool(include_parameters)).lower()} then (
-            local pTake = pCount
-            if pTake > {max_p} then (
-                out += "WARN|PARAM_TRUNCATED|" + (pCount as string) + "|" + ({max_p} as string) + "\\n"
-                pTake = {max_p}
-            )
-            for i = 1 to pTake do (
-                local pId = arrVal n.paid i ""
-                local pName = arrVal n.paname i ""
-                local pType = arrVal n.patype i -1
-                local pTypeName = pTypeLabel pType
-                local pLimit = arrVal n.palimit i false
-                local pSel = arrVal n.paselector i ""
-                local pDesc = arrVal n.padesc i ""
-                local pModified = arrVal n.pamodified i false
-                local pRetain = arrVal n.paretain i 0
-
-                local pVal = ""
-                local pMin = ""
-                local pMax = ""
-                case pType of (
-                    0: (
-                        pVal = (arrVal n.paintval i 0) as string
-                        pMin = (arrVal n.paintmin i 0) as string
-                        pMax = (arrVal n.paintmax i 0) as string
-                    )
-                    1: (
-                        pVal = (arrVal n.pafloatval i 0.0) as string
-                        pMin = (arrVal n.pafloatmin i 0.0) as string
-                        pMax = (arrVal n.pafloatmax i 0.0) as string
-                    )
-                    3: (
-                        pVal = (arrVal n.paunitval i 0.0) as string
-                        pMin = (arrVal n.paunitmin i 0.0) as string
-                        pMax = (arrVal n.paunitmax i 0.0) as string
-                    )
-                    default: (
-                        local bVal = arrVal n.paboolval i undefined
-                        if bVal != undefined then (
-                            pVal = bVal as string
-                        ) else (
-                            local sVal = arrVal n.pastrval i undefined
-                            if sVal != undefined then pVal = sVal as string
-                        )
-                    )
-                )
-
-                out += "PA|" + (i as string) + "|" + (clean pId) + "|" + (clean pName) + "|" + (pType as string) + "|" + (clean pTypeName) + "|" + (pLimit as string) + "|" + (clean pVal) + "|" + (clean pMin) + "|" + (clean pMax) + "|" + (clean pSel) + "|" + (clean pDesc) + "|" + (pModified as string) + "|" + (pRetain as string) + "\\n"
-            )
-        )
-
-        out
-    )
+if isProperty base #stylelink do (
+    if base.stylelink != undefined do throw "SHARED_STYLE: this RailClone uses a linked master style"
 )
-)"""
+local staged = undefined
+local readback = undefined
+with undo off (
+    staged = copy base
+    local stagedApi = rcApi staged #setXMLStyle
+    local inputXml = rcDecode "{encoded}"
+    local status = stagedApi.setXMLStyle inputXml
+    if status != "Ok" do throw ("STYLE_REJECTED: " + (status as string))
+    readback = stagedApi.getXMLStyle()
+)
+if readback == undefined or readback.count == 0 do throw "INVALID_READBACK: RailClone returned an empty style"
+if readback.count > {MAX_XML_CHARS} do throw "XML_TOO_LARGE: resulting style exceeds the XML response limit"
+local doc = dotNetObject "System.Xml.XmlDocument"
+doc.XmlResolver = undefined
+doc.LoadXml readback
+if doc.DocumentElement.Name != "scene" do throw "INVALID_READBACK: expected scene XML"
+if theHold.Holding() or theHold.IsSuspended() do throw "USER_BUSY: an undo operation is active"
+if obj.baseObject != base or rcToken obj (api.getXMLStyle()) != "{expected_style}" do throw "STALE_STYLE: RailClone changed during staging"
+local ownsHold = false
+local result = undefined
+try (
+    theHold.Begin(); ownsHold = true
+    obj.baseObject = staged
+    -- Recompile with the owning node's transform. A detached base evaluates
+    -- spline references against identity and otherwise double-applies placement.
+    -- Only the new base is changed; cancelling still restores the original base.
+    local adoptedApi = rcApi obj.baseObject #setXMLStyle
+    local adoptedXml = readback
+    local adoptedStatus = adoptedApi.setXMLStyle adoptedXml
+    if adoptedStatus != "Ok" do throw ("STYLE_REJECTED: " + (adoptedStatus as string))
+    local actual = (rcApi obj.baseObject #getXMLStyle).getXMLStyle()
+    if actual != readback do throw "READBACK_MISMATCH: adopted style differs from staged style"
+    result = rcResult obj actual (rcToken obj actual)
+    theHold.Accept "MCP RailClone XML style"; ownsHold = false
+) catch (
+    if ownsHold do theHold.Cancel()
+    throw()
+)
+result
+''')
+    result = _style_result(result)
+    result.update(status="Ok", undoable=True, base_replaced=True)
+    return result
 
-    try:
-        response = client.send_command(maxscript)
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
 
-    raw = str(response.get("result", ""))
-    if raw.startswith("__ERROR__|"):
-        return json.dumps({"error": raw.split("|", 1)[1]})
-    return json.dumps(_parse_style_graph_lines(raw, fallback_name=name))
+@mcp.tool()
+def get_railclone_output(
+    name: str = "",
+    handle: int = 0,
+    offset: int = 0,
+    limit: int = 100,
+    include_xml: bool = False,
+) -> dict[str, Any]:
+    """Inspect RailClone getXMLOutput at the current frame, without rendering.
+
+    Returns paged item attributes verbatim: index, source_segment, instanced, tm,
+    box, tags, plus future fields. Matrix/bounds strings keep RailClone's native
+    convention; no coordinate conversion is inferred. offset is a zero-based row
+    offset. total and truncated describe pagination. include_xml adds the full,
+    unpaginated XML. Each call reevaluates output; pages are not a snapshot.
+    Empty output is valid. Complete XML is capped at 4 million characters.
+    """
+    integer(offset, "offset", low=0, high=2**31 - 1)
+    integer(limit, "limit", high=10000)
+    if type(include_xml) is not bool:
+        raise ValueError("include_xml must be boolean")
+    result = _run(_target(name, handle) + f'''
+local api = rcApi obj.baseObject #getXMLOutput
+local xml = api.getXMLOutput()
+if xml.count > {MAX_XML_CHARS} do throw "XML_TOO_LARGE: output exceeds the XML response limit"
+rcResult obj xml ""
+''')
+    root = _xml(result["xml"], "RailClone")
+    items = root.findall("item")
+    result.pop("style_token")
+    if not include_xml:
+        result.pop("xml")
+    end = min(offset + limit, len(items))
+    result.update(schema=dict(root.attrib), total=len(items), offset=offset,
+                  items=[dict(item.attrib) for item in items[offset:end]],
+                  truncated=end < len(items), next_offset=end if end < len(items) else None)
+    return result
