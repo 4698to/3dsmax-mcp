@@ -11,7 +11,7 @@ Connect AI agents to Autodesk 3ds Max through the [Model Context Protocol](https
 
 Automate everything!
 
-**Current release: 1.7.1** — see [CHANGELOG.md](docs/CHANGELOG.md).
+**Current release: 1.7.2** — see [CHANGELOG.md](docs/CHANGELOG.md).
 
 ## Features
 
@@ -29,7 +29,7 @@ Automate everything!
 ## Quick start
 
 1. Close 3ds Max and fully exit your AI clients.
-2. Run `3dsmax-mcp-1.7.1-Setup.exe` and select your clients.
+2. Run `3dsmax-mcp-1.7.2-Setup.exe` and select your clients.
 3. Open 3ds Max and restart your AI client.
 
 The installer includes Python, dependencies, native bridges and agent skills.
@@ -368,21 +368,21 @@ and existing procedural skies use the provider's dome or environment binding.
 | `get_tyflow_particles` | Particle data rows |
 | `reset_tyflow_simulation` | Reset one or all tyFlow sims |
 
-> **Work in progress** — the Forest Pack and RailClone integrations below are early-stage and may be incomplete or change between releases. Everything listed above is stable.
-
-### Forest Pack (WIP)
-
-| Tool | Description |
-|------|-------------|
-| `scatter_forest_pack` | Create a Forest Pack scatter with surfaces and source geometry |
-
-### RailClone (WIP)
+### RailClone (1.7.2)
 
 | Tool | Description |
 |------|-------------|
 | `get_railclone_style` | Read complete style XML and edit token (RailClone 7.3.5+) |
 | `set_railclone_style` | Replace style XML with guarded, undoable adoption |
 | `get_railclone_output` | Read generated segments, transforms, bounds, and tags |
+
+### Forest Pack (WIP)
+
+> **Work in progress** — the Forest Pack integration is early-stage and may be incomplete or change between releases.
+
+| Tool | Description |
+|------|-------------|
+| `scatter_forest_pack` | Create a Forest Pack scatter with surfaces and source geometry |
 
 ### Scripting & diagnostics
 
