@@ -1,9 +1,11 @@
-"""Multi-instance registry and per-session exclusivity for 3ds Max MCP.
+"""Multi-instance registry and per-session short leases for 3ds Max MCP.
 
 Each configured 3ds Max instance is an exclusive resource: at most one MCP
-session may hold it at a time. A session explicitly acquires an instance,
-uses it through the shared `client` proxy, then explicitly releases it so
-the instance becomes idle and available to other users.
+session may hold it at a time. A session acquires an instance (optionally
+waiting on a bounded FIFO queue), uses it through the shared `client` proxy,
+then releases it — or the idle lease expires — so the instance becomes
+available to the next waiter. New leases reset the scene by default for
+multi-tenant isolation.
 
 Instance sources (merged):
 
@@ -16,7 +18,7 @@ Instance sources (merged):
        max1 = 192.168.139.45:8765
 
        [workspace]
-       path = \\fileserver\share\3dsmax-mcp\workspace
+       path = \\\\fileserver\\share\\3dsmax-mcp\\workspace
 
    Search order: ``MAXMCP_INSTANCES_FILE``, cwd / project-root
    ``max_instances.ini``, then ``%LOCALAPPDATA%\\3dsmax-mcp\\max_instances.ini``.
@@ -37,6 +39,13 @@ Instance sources (merged):
 A background watcher thread applies the heartbeat TTL continuously: an instance
 is marked offline and dropped from the managed list (its lock released) as soon
 as its heartbeat expires, without waiting for the next tool call.
+
+Lease / queue env knobs:
+
+- ``MAXMCP_LOCK_TTL`` — idle lease seconds (default 180)
+- ``MAXMCP_ACQUIRE_WAIT_SECONDS`` — max seconds to wait in FIFO queue (default 60)
+- ``MAXMCP_ACQUIRE_QUEUE_MAX`` — max waiters before QUEUE_FULL (default 32)
+- ``MAXMCP_RESET_ON_ACQUIRE`` — reset Max scene on new lease (default true)
 """
 
 from __future__ import annotations
@@ -57,10 +66,16 @@ from .max_client import MaxClient, PROBE_SERIAL, _probe_named_pipe_unlocked
 ENV_INSTANCES = "MAXMCP_INSTANCES"
 ENV_INSTANCES_FILE = "MAXMCP_INSTANCES_FILE"
 ENV_LOCK_TTL = "MAXMCP_LOCK_TTL"
+ENV_ACQUIRE_WAIT = "MAXMCP_ACQUIRE_WAIT_SECONDS"
+ENV_ACQUIRE_QUEUE_MAX = "MAXMCP_ACQUIRE_QUEUE_MAX"
+ENV_RESET_ON_ACQUIRE = "MAXMCP_RESET_ON_ACQUIRE"
 ENV_REGISTRY = "MAXMCP_REGISTRY"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
-DEFAULT_LOCK_TTL = 30 * 60  # seconds; abandoned locks are auto-released
+# Idle lease: no tool activity for this long -> auto-release (public multi-agent default).
+DEFAULT_LOCK_TTL = 180
+DEFAULT_ACQUIRE_WAIT_SECONDS = 60.0
+DEFAULT_ACQUIRE_QUEUE_MAX = 32
 DEFAULT_PURGE_INTERVAL = 15  # seconds between stale-lock sweep cycles
 REGISTRY_HEARTBEAT_SECONDS = 30  # how often 3ds Max refreshes its entry
 REGISTRY_TTL = 90  # seconds; an entry not refreshed within this is gone
@@ -101,6 +116,30 @@ class InstanceNotAcquiredError(InstanceError):
 
 class NoFreeInstanceError(InstanceError):
     """All configured instances are currently busy."""
+
+
+class QueueFullError(InstanceError):
+    """Acquire wait queue is at capacity (hard backpressure)."""
+
+
+class AcquireWaitTimeoutError(InstanceError):
+    """Timed out waiting for an idle instance."""
+
+
+@dataclass
+class _AcquireWaiter:
+    """One FIFO wait-queue entry for a session blocked in acquire()."""
+
+    session: object
+    name: Optional[str]
+    reset_scene: bool
+    event: threading.Event
+    enqueued_at: float
+    position: int = 0
+    result: Optional[MaxClient] = None
+    error: Optional[BaseException] = None
+    scene_reset: bool = False
+    cancelled: bool = False
 
 
 @dataclass
@@ -182,11 +221,45 @@ def _pipe_name_for_pid(pid: int) -> str:
 def _env_lock_ttl() -> float:
     raw = os.environ.get(ENV_LOCK_TTL)
     if raw is None:
-        return DEFAULT_LOCK_TTL
+        return float(DEFAULT_LOCK_TTL)
     try:
-        return max(60.0, float(raw))
+        return max(30.0, float(raw))
     except ValueError:
-        return DEFAULT_LOCK_TTL
+        return float(DEFAULT_LOCK_TTL)
+
+
+def _env_acquire_wait_seconds() -> float:
+    raw = os.environ.get(ENV_ACQUIRE_WAIT)
+    if raw is None:
+        return DEFAULT_ACQUIRE_WAIT_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return DEFAULT_ACQUIRE_WAIT_SECONDS
+
+
+def _env_acquire_queue_max() -> int:
+    raw = os.environ.get(ENV_ACQUIRE_QUEUE_MAX)
+    if raw is None:
+        return DEFAULT_ACQUIRE_QUEUE_MAX
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_ACQUIRE_QUEUE_MAX
+
+
+def _env_reset_on_acquire() -> bool:
+    raw = os.environ.get(ENV_RESET_ON_ACQUIRE)
+    if raw is None:
+        return True
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _retry_after_seconds(queue_depth: int, lock_ttl: float) -> float:
+    """Suggested client backoff when acquire is rejected."""
+    if queue_depth <= 0:
+        return min(15.0, max(5.0, lock_ttl / 12.0))
+    return min(60.0, max(5.0, 5.0 + queue_depth * 2.0))
 
 
 def _default_registry_path() -> str:
@@ -294,14 +367,38 @@ def _discover_instances_file() -> tuple[Optional[Path], list[tuple[str, int, str
 
 
 class InstanceManager:
-    """Thread-safe registry of 3ds Max instances with per-session locks."""
+    """Thread-safe registry of 3ds Max instances with per-session short leases."""
 
-    def __init__(self, spec: Optional[str] = None, lock_ttl: Optional[float] = None):
+    def __init__(
+        self,
+        spec: Optional[str] = None,
+        lock_ttl: Optional[float] = None,
+        *,
+        acquire_wait_seconds: Optional[float] = None,
+        acquire_queue_max: Optional[int] = None,
+        reset_on_acquire: Optional[bool] = None,
+    ):
         self._lock = threading.RLock()
         self._lock_ttl = lock_ttl if lock_ttl is not None else _env_lock_ttl()
+        self._acquire_wait_seconds = (
+            acquire_wait_seconds
+            if acquire_wait_seconds is not None
+            else _env_acquire_wait_seconds()
+        )
+        self._acquire_queue_max = (
+            acquire_queue_max
+            if acquire_queue_max is not None
+            else _env_acquire_queue_max()
+        )
+        self._reset_on_acquire = (
+            reset_on_acquire
+            if reset_on_acquire is not None
+            else _env_reset_on_acquire()
+        )
         self._instances: list[IMaxInstance] = []
         self._clients: dict[str, MaxClient] = {}
         self._by_session: dict[object, str] = {}  # session object -> instance name
+        self._wait_queue: list[_AcquireWaiter] = []
         self._auto_bind = False  # single-instance fallback binds implicitly
         env_spec = os.environ.get(ENV_INSTANCES)
         # Explicit env/constructor OR a populated max_instances.ini -> never
@@ -318,6 +415,14 @@ class InstanceManager:
         )
         self.start_watching()
         self._start_stale_purger()
+        logging.info(
+            "InstanceManager lease policy: idle_ttl=%ss acquire_wait=%ss "
+            "queue_max=%s reset_on_acquire=%s",
+            self._lock_ttl,
+            self._acquire_wait_seconds,
+            self._acquire_queue_max,
+            self._reset_on_acquire,
+        )
 
     # ------------------------------------------------------------------ #
     # Loading
@@ -730,19 +835,43 @@ class InstanceManager:
     # Lock lifecycle
     # ------------------------------------------------------------------ #
 
+    @property
+    def lock_ttl(self) -> float:
+        return self._lock_ttl
+
+    @property
+    def acquire_wait_seconds(self) -> float:
+        return self._acquire_wait_seconds
+
+    @property
+    def acquire_queue_max(self) -> int:
+        return self._acquire_queue_max
+
+    @property
+    def reset_on_acquire(self) -> bool:
+        return self._reset_on_acquire
+
+    def queue_depth(self) -> int:
+        with self._lock:
+            return len(self._wait_queue)
+
     def _purge_stale_locks(self) -> None:
-        """Release locks held for longer than the TTL (abandoned sessions)."""
+        """Release locks held idle longer than the TTL (abandoned sessions)."""
         now = time.monotonic()
+        released = False
         for inst in self._instances:
             if inst.locked_by and inst.locked_at and (now - inst.locked_at) > self._lock_ttl:
                 logging.warning(
-                    "Instance %s lock held by stale session %s exceeded TTL; releasing",
+                    "Instance %s idle lease held by session %s exceeded TTL; releasing",
                     inst.name,
                     _display(inst.locked_by),
                 )
                 self._by_session.pop(inst.locked_by, None)
                 inst.locked_by = None
                 inst.locked_at = None
+                released = True
+        if released:
+            self._dispatch_waiters_locked()
 
     def _start_stale_purger(self) -> None:
         """Daemon thread: sweep expired locks every DEFAULT_PURGE_INTERVAL.
@@ -768,33 +897,232 @@ class InstanceManager:
             except Exception:  # keep sweeping on transient errors
                 continue
 
-    def acquire(self, session: object, name: Optional[str] = None) -> MaxClient:
-        """Bind session to a free instance and return its client.
+    def _pick_idle_locked(self, name: Optional[str]) -> IMaxInstance:
+        """Return an idle instance or raise. Caller holds self._lock."""
+        if not self._instances:
+            raise NoFreeInstanceError(
+                "No 3ds Max instances discovered. Make sure the 3ds Max MCP "
+                "server script is running in at least one 3ds Max instance."
+            )
 
-        Idempotent: a session that already holds an instance keeps it. When a
-        specific name is given and the session holds a different instance, the
-        session switches: its current instance is released first, then the
-        named one is acquired (if free). Raises InstanceBusyError if the named
-        instance is held by another session, or NoFreeInstanceError when no
-        instance is idle.
-        """
-        if session is None:
-            raise InstanceError("No MCP session available for acquisition")
+        if name:
+            inst = self._find(name)
+            if inst is None:
+                raise InstanceError(
+                    f"Unknown instance {name!r}. Configured: "
+                    f"{[i.name for i in self._instances]}"
+                )
+            if inst.locked_by:
+                raise InstanceBusyError(
+                    f"Instance {name!r} is busy: held by another session "
+                    f"({_display(inst.locked_by)})"
+                )
+            if inst.online is False:
+                raise InstanceError(
+                    f"Instance {name!r} is offline ({inst.host}:{inst.port})"
+                    + (f": {inst.online_error}" if inst.online_error else "")
+                )
+            return inst
+
+        # Prefer reachable idle instances; fall back to unknown (not yet probed).
+        inst = next(
+            (i for i in self._instances if not i.locked_by and i.online is True),
+            None,
+        )
+        if inst is None:
+            inst = next(
+                (
+                    i
+                    for i in self._instances
+                    if not i.locked_by and i.online is not False
+                ),
+                None,
+            )
+        if inst is None:
+            raise NoFreeInstanceError(
+                "No online idle 3ds Max instance available: "
+                + ", ".join(
+                    (
+                        f"{i.name}({'busy' if i.locked_by else 'offline' if i.online is False else 'idle'})"
+                        for i in self._instances
+                    )
+                )
+            )
+        return inst
+
+    def _grant_locked(
+        self, session: object, inst: IMaxInstance
+    ) -> MaxClient:
+        """Bind session to inst. Caller holds self._lock."""
+        inst.locked_by = session
+        inst.locked_at = time.monotonic()
+        self._by_session[session] = inst.name
+        logging.info(
+            "Session %s acquired instance %s (%s:%s)",
+            _display(session),
+            inst.name,
+            inst.host,
+            inst.port,
+        )
+        return self._clients[inst.name]
+
+    def _reset_scene(self, client: MaxClient) -> None:
+        """Clear the Max scene for multi-tenant isolation."""
+        if getattr(client, "native_available", False):
+            client.send_command(
+                json.dumps({"action": "reset"}),
+                cmd_type="native:manage_scene",
+            )
+        else:
+            client.send_command("MCP_SceneManage.resetScene()")
+
+    def _busy_summary_locked(self) -> str:
+        return ", ".join(
+            (
+                f"{i.name}({'busy' if i.locked_by else 'offline' if i.online is False else 'idle'})"
+                for i in self._instances
+            )
+        )
+
+    def _dispatch_waiters_locked(self) -> None:
+        """Grant idle instances to FIFO waiters. Caller holds self._lock."""
+        if not self._wait_queue:
+            return
+        remaining: list[_AcquireWaiter] = []
+        for waiter in self._wait_queue:
+            if waiter.cancelled:
+                continue
+            try:
+                inst = self._pick_idle_locked(waiter.name)
+            except InstanceBusyError:
+                remaining.append(waiter)
+                continue
+            except NoFreeInstanceError:
+                remaining.append(waiter)
+                # Later waiters wanting "any" also cannot proceed; named ones
+                # for other instances might, so keep scanning.
+                continue
+            except InstanceError as exc:
+                waiter.error = exc
+                waiter.event.set()
+                continue
+            waiter.result = self._grant_locked(waiter.session, inst)
+            waiter.scene_reset = waiter.reset_scene
+            waiter.event.set()
+        self._wait_queue = remaining
+        for idx, waiter in enumerate(self._wait_queue, start=1):
+            waiter.position = idx
+
+    def _cancel_waiters_locked(self, session: object) -> None:
+        """Remove and wake any wait-queue entries for session."""
+        kept: list[_AcquireWaiter] = []
+        for waiter in self._wait_queue:
+            if waiter.session is session:
+                waiter.cancelled = True
+                waiter.error = InstanceError("Acquire wait cancelled (session cleanup)")
+                waiter.event.set()
+            else:
+                kept.append(waiter)
+        self._wait_queue = kept
+        for idx, waiter in enumerate(self._wait_queue, start=1):
+            waiter.position = idx
+
+    def _try_grant_now(
+        self,
+        session: object,
+        name: Optional[str],
+        *,
+        reset_scene: bool,
+    ) -> tuple[Optional[MaxClient], bool]:
+        """Immediate acquire attempt. Returns (client, scene_reset_pending)."""
         with self._lock:
             self.refresh_registry()
             self._purge_stale_locks()
             held = self._by_session.get(session)
             if held is not None:
                 if name is None or name == held:
-                    return self._clients[held]
+                    return self._clients[held], False
                 self._release_locked(session, held)
+                self._dispatch_waiters_locked()
+            try:
+                inst = self._pick_idle_locked(name)
+            except (InstanceBusyError, NoFreeInstanceError):
+                return None, False
+            client = self._grant_locked(session, inst)
+            return client, reset_scene
 
-            if not self._instances:
-                raise NoFreeInstanceError(
-                    "No 3ds Max instances discovered. Make sure the 3ds Max MCP "
-                    "server script is running in at least one 3ds Max instance."
-                )
+    def acquire(
+        self,
+        session: object,
+        name: Optional[str] = None,
+        *,
+        wait: bool = True,
+        reset_scene: Optional[bool] = None,
+    ) -> MaxClient:
+        """Bind session to a free instance and return its client.
 
+        When no instance is idle and ``wait`` is true, enqueues the session on
+        a bounded FIFO wait list for up to ``acquire_wait_seconds``. Raises
+        QueueFullError / AcquireWaitTimeoutError / NoFreeInstanceError /
+        InstanceBusyError on failure.
+
+        Idempotent: a session that already holds an instance keeps it. When a
+        specific name is given and the session holds a different instance, the
+        session switches: its current instance is released first, then the
+        named one is acquired (if free).
+        """
+        client, _meta = self.acquire_with_meta(
+            session, name, wait=wait, reset_scene=reset_scene
+        )
+        return client
+
+    def acquire_with_meta(
+        self,
+        session: object,
+        name: Optional[str] = None,
+        *,
+        wait: bool = True,
+        reset_scene: Optional[bool] = None,
+    ) -> tuple[MaxClient, dict[str, Any]]:
+        """Like acquire(), also returning lease metadata for tool responses."""
+        if session is None:
+            raise InstanceError("No MCP session available for acquisition")
+
+        do_reset = self._reset_on_acquire if reset_scene is None else bool(reset_scene)
+        started = time.monotonic()
+        wait_seconds = self._acquire_wait_seconds if wait else 0.0
+        queue_position: Optional[int] = None
+
+        client, needs_reset = self._try_grant_now(session, name, reset_scene=do_reset)
+        if client is not None:
+            scene_reset = False
+            if needs_reset:
+                try:
+                    self._reset_scene(client)
+                    scene_reset = True
+                except Exception:
+                    logging.exception(
+                        "Scene reset failed after acquire for session %s; releasing",
+                        _display(session),
+                    )
+                    with self._lock:
+                        held = self._by_session.get(session)
+                        if held:
+                            self._release_locked(session, held)
+                            self._dispatch_waiters_locked()
+                    raise InstanceError(
+                        "Acquired instance but scene reset failed; lease released. Retry."
+                    )
+            return client, {
+                "waited_seconds": round(time.monotonic() - started, 2),
+                "queue_position": None,
+                "lease_idle_seconds": self._lock_ttl,
+                "scene_reset": scene_reset,
+            }
+
+        # Named offline / unknown already raised inside _pick when no busy case;
+        # _try_grant_now swallows only Busy/NoFree. Re-check hard errors now.
+        with self._lock:
             if name:
                 inst = self._find(name)
                 if inst is None:
@@ -802,57 +1130,101 @@ class InstanceManager:
                         f"Unknown instance {name!r}. Configured: "
                         f"{[i.name for i in self._instances]}"
                     )
-                if inst.locked_by:
-                    raise InstanceBusyError(
-                        f"Instance {name!r} is busy: held by another session "
-                        f"({_display(inst.locked_by)})"
-                    )
                 if inst.online is False:
                     raise InstanceError(
                         f"Instance {name!r} is offline ({inst.host}:{inst.port})"
                         + (f": {inst.online_error}" if inst.online_error else "")
                     )
-            else:
-                # Prefer reachable idle instances; fall back to unknown (not yet probed).
-                inst = next(
-                    (
-                        i
-                        for i in self._instances
-                        if not i.locked_by and i.online is True
-                    ),
-                    None,
+            if not self._instances:
+                raise NoFreeInstanceError(
+                    "No 3ds Max instances discovered. Make sure the 3ds Max MCP "
+                    "server script is running in at least one 3ds Max instance."
                 )
-                if inst is None:
-                    inst = next(
-                        (
-                            i
-                            for i in self._instances
-                            if not i.locked_by and i.online is not False
-                        ),
-                        None,
+            if not wait or wait_seconds <= 0:
+                if name:
+                    raise InstanceBusyError(
+                        f"Instance {name!r} is busy: held by another session "
+                        f"({_display(self._find(name).locked_by) if self._find(name) else '?'})"
                     )
-                if inst is None:
-                    raise NoFreeInstanceError(
-                        "No online idle 3ds Max instance available: "
-                        + ", ".join(
-                            (
-                                f"{i.name}({'busy' if i.locked_by else 'offline' if i.online is False else 'idle'})"
-                                for i in self._instances
-                            )
-                        )
-                    )
-
-            inst.locked_by = session
-            inst.locked_at = time.monotonic()
-            self._by_session[session] = inst.name
-            logging.info(
-                "Session %s acquired instance %s (%s:%s)",
-                _display(session),
-                inst.name,
-                inst.host,
-                inst.port,
+                raise NoFreeInstanceError(
+                    "No online idle 3ds Max instance available: "
+                    + self._busy_summary_locked()
+                )
+            if len(self._wait_queue) >= self._acquire_queue_max:
+                raise QueueFullError(
+                    f"Acquire wait queue is full ({self._acquire_queue_max}). "
+                    "Retry later."
+                )
+            # One wait slot per session.
+            self._cancel_waiters_locked(session)
+            waiter = _AcquireWaiter(
+                session=session,
+                name=name,
+                reset_scene=do_reset,
+                event=threading.Event(),
+                enqueued_at=time.monotonic(),
+                position=len(self._wait_queue) + 1,
             )
-            return self._clients[inst.name]
+            self._wait_queue.append(waiter)
+            queue_position = waiter.position
+            logging.info(
+                "Session %s queued for acquire (position=%s name=%r)",
+                _display(session),
+                queue_position,
+                name,
+            )
+
+        # Block outside the manager lock so releasers can progress.
+        remaining = wait_seconds
+        while remaining > 0:
+            if waiter.event.wait(timeout=min(remaining, 0.5)):
+                break
+            remaining = wait_seconds - (time.monotonic() - started)
+
+        with self._lock:
+            if waiter in self._wait_queue:
+                self._wait_queue.remove(waiter)
+                for idx, w in enumerate(self._wait_queue, start=1):
+                    w.position = idx
+            if waiter.result is not None:
+                client = waiter.result
+                needs_reset = waiter.scene_reset
+            elif waiter.error is not None and not isinstance(
+                waiter.error, (InstanceBusyError, NoFreeInstanceError)
+            ):
+                raise waiter.error
+            else:
+                raise AcquireWaitTimeoutError(
+                    f"Timed out after {wait_seconds:.0f}s waiting for an idle "
+                    f"3ds Max instance (queued at position {queue_position}). "
+                    + self._busy_summary_locked()
+                )
+
+        scene_reset = False
+        if needs_reset:
+            try:
+                self._reset_scene(client)
+                scene_reset = True
+            except Exception:
+                logging.exception(
+                    "Scene reset failed after queued acquire for session %s; releasing",
+                    _display(session),
+                )
+                with self._lock:
+                    held = self._by_session.get(session)
+                    if held:
+                        self._release_locked(session, held)
+                        self._dispatch_waiters_locked()
+                raise InstanceError(
+                    "Acquired instance but scene reset failed; lease released. Retry."
+                )
+
+        return client, {
+            "waited_seconds": round(time.monotonic() - started, 2),
+            "queue_position": queue_position,
+            "lease_idle_seconds": self._lock_ttl,
+            "scene_reset": scene_reset,
+        }
 
     def _release_locked(self, session: object, name: str) -> None:
         """Clear the lock for `name` held by session. Caller holds self._lock."""
@@ -875,22 +1247,31 @@ class InstanceManager:
                 )
             held = self._by_session.get(session)
             if held is None and self._auto_bind and len(self._instances) == 1:
-                return self.acquire(session)
-            if held is None:
+                # Auto-bind must not block on the public wait queue.
+                pass
+            elif held is None:
                 raise InstanceNotAcquiredError(
                     "This session has not acquired any 3ds Max instance. "
                     "Call acquire_instance first, and release_instance when done."
                 )
-            inst = self._find(held)
-            if inst is not None and inst.locked_by != session:
-                # Lock was lost (e.g. stale-purged while this session reused the id).
-                return self.acquire(session)
-            if inst is not None:
-                # Activity renewal: every request from a holding session pushes the
-                # TTL deadline forward, so an abandoned session's lock expires
-                # DEFAULT_LOCK_TTL after its last use rather than after acquire.
-                inst.locked_at = time.monotonic()
-            return self._clients[held]
+            else:
+                inst = self._find(held)
+                if inst is not None and inst.locked_by != session:
+                    # Lock was lost (e.g. stale-purged while this session reused the id).
+                    pass
+                elif inst is not None:
+                    # Activity renewal: every request from a holding session pushes the
+                    # idle-lease deadline forward.
+                    inst.locked_at = time.monotonic()
+                    return self._clients[held]
+                else:
+                    raise InstanceNotAcquiredError(
+                        "This session has not acquired any 3ds Max instance. "
+                        "Call acquire_instance first, and release_instance when done."
+                    )
+
+        # Outside lock: implicit re-bind without waiting / without scene reset.
+        return self.acquire(session, wait=False, reset_scene=False)
 
     def release(self, session: object, name: Optional[str] = None) -> dict[str, Any]:
         """Explicitly free the instance held by session.
@@ -907,16 +1288,54 @@ class InstanceManager:
                     f"Session holds instance {held!r}, not {name!r}."
                 )
             self._release_locked(session, held)
+            self._dispatch_waiters_locked()
             logging.info("Session %s released instance %s", _display(session), held)
             return {"released": held, "idle": True}
 
     def release_all_for_session(self, session: object) -> None:
-        """Defensive cleanup of every lock held by a session (never raises)."""
+        """Defensive cleanup: cancel waits and free any lock (never raises)."""
+        if session is None:
+            return
         with self._lock:
+            self._cancel_waiters_locked(session)
             held = self._by_session.get(session)
             if held:
                 self._release_locked(session, held)
-                logging.info("Session %s cleanup released instance %s", _display(session), held)
+                logging.info(
+                    "Session %s cleanup released instance %s",
+                    _display(session),
+                    held,
+                )
+            self._dispatch_waiters_locked()
+
+    def cancel_acquire_wait(self, session: object) -> None:
+        """Cancel a pending acquire wait for this session (never raises)."""
+        if session is None:
+            return
+        with self._lock:
+            self._cancel_waiters_locked(session)
+
+    def reject_payload(
+        self,
+        code: str,
+        error: str,
+        *,
+        retryable: bool = True,
+    ) -> dict[str, Any]:
+        """Structured acquire failure for MCP tool responses."""
+        with self._lock:
+            depth = len(self._wait_queue)
+        return {
+            "acquired": False,
+            "code": code,
+            "error": error,
+            "retryable": retryable,
+            "retry_after_seconds": _retry_after_seconds(depth, self._lock_ttl),
+            "queue_depth": depth,
+            "queue_max": self._acquire_queue_max,
+            "lease_idle_seconds": self._lock_ttl,
+            "acquire_wait_seconds": self._acquire_wait_seconds,
+        }
 
     # ------------------------------------------------------------------ #
     # Reachability

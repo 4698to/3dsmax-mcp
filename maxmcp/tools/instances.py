@@ -3,6 +3,12 @@
 These tools let a user discover the configured instances, explicitly acquire
 (lock) one for exclusive use, and explicitly release it when done so the
 instance becomes idle and available to other users.
+
+Public multi-agent mode uses a bounded FIFO wait queue and a short idle lease:
+``acquire_instance`` waits up to ``MAXMCP_ACQUIRE_WAIT_SECONDS`` for capacity,
+rejects with ``QUEUE_FULL`` when the wait list is saturated, and auto-releases
+after ``MAXMCP_LOCK_TTL`` seconds without tool activity (activity renews the
+lease). New leases reset the scene by default (``MAXMCP_RESET_ON_ACQUIRE``).
 """
 
 from __future__ import annotations
@@ -13,13 +19,24 @@ from typing import Optional
 from mcp.server.fastmcp import Context
 
 from ..instance_manager import (
+    AcquireWaitTimeoutError,
     InstanceBusyError,
     InstanceError,
     InstanceNotAcquiredError,
     NoFreeInstanceError,
+    QueueFullError,
     manager,
 )
 from ..server import mcp
+
+
+def _instance_payload(session: object, client) -> dict:
+    mine = manager.get_my_instance(session).get("instance") or {}
+    return {
+        "name": mine.get("name"),
+        "host": getattr(client, "host", mine.get("host")),
+        "port": getattr(client, "port", mine.get("port")),
+    }
 
 
 @mcp.tool()
@@ -29,40 +46,79 @@ def list_instances() -> str:
     Shows each instance's name, host, port, pid/pipe when known, TCP
     (`tcp_online`) and native-pipe (`native_online`) reachability, whether it
     is pinned, held (`busy`), and for how long. ``online`` is true if either
-    transport answered. Probes are process-wide serial (one Max at a time;
-    never overlap with list_max_instances). Use this before acquire_instance.
-    Remote hosts only get a TCP ping; named pipes are local to the Max machine.
+    transport answered. Also reports the acquire wait-queue depth. Probes are
+    process-wide serial (one Max at a time; never overlap with
+    list_max_instances). Use this before acquire_instance. Remote hosts only
+    get a TCP ping; named pipes are local to the Max machine.
     """
-    return json.dumps({"instances": manager.list_instances()}, ensure_ascii=False)
+    return json.dumps(
+        {
+            "instances": manager.list_instances(),
+            "queue_depth": manager.queue_depth(),
+            "queue_max": manager.acquire_queue_max,
+            "lease_idle_seconds": manager.lock_ttl,
+            "acquire_wait_seconds": manager.acquire_wait_seconds,
+            "reset_on_acquire": manager.reset_on_acquire,
+        },
+        ensure_ascii=False,
+    )
 
 
 @mcp.tool()
-def acquire_instance(ctx: Context, name: Optional[str] = None) -> str:
-    """Explicitly acquire (lock) a 3ds Max instance for the current user.
+def acquire_instance(
+    ctx: Context,
+    name: Optional[str] = None,
+    reset_scene: Optional[bool] = None,
+) -> str:
+    """Acquire a short lease on a 3ds Max instance for this MCP session.
 
-    Session lock only — does not ping Max. Relies on online flags from a prior
-    list_instances. Each instance accepts only one user at a time. Call this
-    before using any scene tool so commands are routed to your own instance.
-    If no name is given, the first idle online instance is chosen. Calling it
-    again while already holding an instance keeps your current one.
+    If no instance is idle, waits up to the configured acquire timeout on a
+    bounded FIFO queue (does not busy-poll). On success the lease is exclusive
+    until ``release_instance``, idle TTL expiry, or session disconnect. Activity
+    on scene tools renews the idle timer. By default a fresh lease resets the
+    Max scene so tenants do not see each other's work.
 
     Args:
-        name: Optional instance name from list_instances to acquire. When
-            omitted, an idle instance is picked automatically.
+        name: Optional instance name from list_instances. When omitted, the
+            first idle online instance is chosen.
+        reset_scene: Override scene reset for this acquire. None uses the
+            server default (MAXMCP_RESET_ON_ACQUIRE, default true).
     """
     session = ctx.session
     try:
-        instance_client = manager.acquire(session, name=name)
-    except (InstanceBusyError, NoFreeInstanceError, InstanceError) as exc:
-        return json.dumps({"acquired": False, "error": str(exc)}, ensure_ascii=False)
+        client, meta = manager.acquire_with_meta(
+            session, name=name, wait=True, reset_scene=reset_scene
+        )
+    except QueueFullError as exc:
+        return json.dumps(
+            manager.reject_payload("QUEUE_FULL", str(exc), retryable=True),
+            ensure_ascii=False,
+        )
+    except AcquireWaitTimeoutError as exc:
+        return json.dumps(
+            manager.reject_payload("WAIT_TIMEOUT", str(exc), retryable=True),
+            ensure_ascii=False,
+        )
+    except InstanceBusyError as exc:
+        return json.dumps(
+            manager.reject_payload("INSTANCE_BUSY", str(exc), retryable=True),
+            ensure_ascii=False,
+        )
+    except NoFreeInstanceError as exc:
+        return json.dumps(
+            manager.reject_payload("NO_FREE_INSTANCE", str(exc), retryable=True),
+            ensure_ascii=False,
+        )
+    except InstanceError as exc:
+        return json.dumps(
+            manager.reject_payload("INSTANCE_ERROR", str(exc), retryable=False),
+            ensure_ascii=False,
+        )
     return json.dumps(
         {
             "acquired": True,
-            "instance": {
-                "name": name or manager.get_my_instance(session)["instance"]["name"],
-                "host": instance_client.host,
-                "port": instance_client.port,
-            },
+            "instance": _instance_payload(session, client),
+            **meta,
         },
         ensure_ascii=False,
     )
@@ -73,9 +129,9 @@ def release_instance(ctx: Context, name: Optional[str] = None) -> str:
     """Release the 3ds Max instance held by the current user.
 
     Call this when the user's task is complete so the instance becomes idle
-    and available to other users. Only the holder can release; an instance is
-    also released automatically after the lock timeout if a user disconnects
-    without releasing.
+    and available to other users (FIFO waiters are woken immediately). Only the
+    holder can release; an idle lease also expires after MAXMCP_LOCK_TTL without
+    tool activity, and session disconnect auto-releases.
 
     Args:
         name: Optional instance name to release. When omitted, releases

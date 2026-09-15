@@ -19,6 +19,37 @@ mcp = FastMCP(
     host=os.environ.get("MCP_HTTP_HOST", "0.0.0.0"),
     port=int(os.environ.get("MCP_HTTP_PORT", "8000")),
 )
+
+
+def _install_session_release_hook() -> None:
+    """Release Max leases / cancel acquire waits when an MCP ServerSession ends."""
+    try:
+        from mcp.server.session import ServerSession
+    except ImportError:
+        return
+    if getattr(ServerSession, "_maxmcp_release_hook", False):
+        return
+    original_aexit = ServerSession.__aexit__
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            return await original_aexit(self, exc_type, exc, tb)
+        finally:
+            try:
+                from .instance_manager import manager
+
+                manager.release_all_for_session(self)
+            except Exception:
+                logging.exception(
+                    "Failed to release 3ds Max lease on MCP session end"
+                )
+
+    ServerSession.__aexit__ = __aexit__  # type: ignore[method-assign]
+    ServerSession._maxmcp_release_hook = True  # type: ignore[attr-defined]
+
+
+_install_session_release_hook()
+
 # Operational tools loaded by the progressive profile live here.  This server
 # is never run, so its tools remain callable without being advertised by the
 # public MCP list_tools surface.
