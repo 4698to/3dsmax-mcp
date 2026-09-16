@@ -7,7 +7,8 @@ Proven UI sequence (global skin):
 3. Click list slot 「(选中后在编辑区添加)」 FIRST (required — otherwise 选定 pops a warning)
 4. Max-select mesh(es) → click 选定 on 「在场景中选择模型」row
 5. Focus list row (模型：N) → Max-select bone(s) → click 选定 on 「在场景中选择关节」
-6. Optional: click 开始蒙皮 and wait OCR 「完成」 (gated by click_start / user confirm)
+6. Optional: click 开始蒙皮 → wait OCR 「完成」→ dismiss 「操作成功」确定
+   (gated by click_start / user confirm; default wait up to 5 min)
 """
 
 from __future__ import annotations
@@ -794,12 +795,14 @@ def confirm_goskin_start(
     title_pattern: str = TITLE_PATTERN,
     vendor_pattern: str = VENDOR_PATTERN,
     ocr_base: str = DEFAULT_OCR_BASE,
-    complete_timeout_s: float = 180.0,
+    complete_timeout_s: float = 300.0,
     poll_s: float = 2.0,
 ) -> dict[str, Any]:
     """Click 「开始蒙皮」 only after explicit user confirmation.
 
     ``user_confirmed`` must be True; otherwise returns without clicking.
+    After OCR sees 「完成」, dismisses the 「操作成功」 modal via 「确定」.
+    Default ``complete_timeout_s`` is 300s (complex meshes can take minutes).
     """
     if not user_confirmed:
         return {
@@ -858,6 +861,36 @@ def confirm_goskin_start(
             "steps": steps,
             "error": done.get("error"),
         }
+
+    # 「操作成功 / 蒙皮已完成」modal — click 确定 so it does not block later UI.
+    success_ok = click_dialog_button(
+        "确定",
+        title_pattern="*",
+        vendor_pattern="*",
+        require_vendor=False,
+        ocr_base=ocr_base,
+        client=client,
+        score_min=0.55,
+    )
+    steps["dismiss_success"] = {
+        "ok": success_ok.get("ok"),
+        "matched": success_ok.get("matched"),
+        "screen_xy": success_ok.get("screen_xy"),
+        "error": success_ok.get("error"),
+    }
+    if not success_ok.get("ok"):
+        # Fallback: same path used for warning dialogs.
+        fallback = dismiss_goskin_warnings(client, ocr_base=ocr_base, max_clicks=2)
+        steps["dismiss_success_fallback"] = fallback
+        if not fallback.get("dismissed"):
+            return {
+                "ok": False,
+                "clicked": True,
+                "steps": steps,
+                "error": success_ok.get("error")
+                or "蒙皮已完成但未能点击「操作成功」弹窗的「确定」",
+            }
+
     return {"ok": True, "clicked": True, "steps": steps, "error": None}
 
 
@@ -871,7 +904,7 @@ def run_goskin_skin(
     title_pattern: str = TITLE_PATTERN,
     vendor_pattern: str = VENDOR_PATTERN,
     ocr_base: str = DEFAULT_OCR_BASE,
-    complete_timeout_s: float = 180.0,
+    complete_timeout_s: float = 300.0,
     poll_s: float = 2.0,
     click_start: bool = False,
     require_counts: bool = True,
@@ -1105,7 +1138,7 @@ def run_goskin_auto(
     menu: str = "自动蒙皮",
     item: str = "GoSkinning",
     open_wait_s: float = 8.0,
-    complete_timeout_s: float = 180.0,
+    complete_timeout_s: float = 300.0,
     click_start: bool = False,
     require_counts: bool = True,
     auto_cleanup: bool = True,

@@ -97,7 +97,7 @@ Task Progress:
 | 收集对象 | `get_unhidden_meshes_bones` | `meshes_handle` / `bones_handle` 非空 |
 | 准备 | `goskin_run_skin` | `awaiting_start_confirm=true`，模型≥1、关节≥1 |
 | 门禁 | （对话） | 用户同意名称/数量 |
-| 开始 | `goskin_confirm_start(user_confirmed=true)` | OCR 看到「完成」（或工具等待成功） |
+| 开始 | `goskin_confirm_start(user_confirmed=true)` | OCR「完成」→ 点「操作成功」的「确定」（默认等 300s） |
 
 `goskin_run_auto` = ensure + run_skin；默认仍会在「开始蒙皮」前 **暂停**。
 

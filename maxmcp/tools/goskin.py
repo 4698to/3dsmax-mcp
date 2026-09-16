@@ -103,7 +103,7 @@ def goskin_run_skin(
     bone_names: Optional[StrList] = None,
     mesh_handles: Optional[IntList] = None,
     bone_handles: Optional[IntList] = None,
-    complete_timeout_s: float = 180.0,
+    complete_timeout_s: float = 300.0,
     click_start: bool = False,
     require_counts: bool = True,
     auto_cleanup: bool = True,
@@ -135,12 +135,13 @@ def goskin_run_skin(
 @mcp.tool()
 def goskin_confirm_start(
     user_confirmed: bool = False,
-    complete_timeout_s: float = 180.0,
+    complete_timeout_s: float = 300.0,
     ocr_base: str = "",
     include_ocr: bool = False,
 ) -> dict[str, Any]:
-    """Click 「开始蒙皮」 only when user_confirmed=true; then wait for OCR 「完成」.
+    """Click 「开始蒙皮」 when user_confirmed=true; wait OCR 「完成」; dismiss 「确定」.
 
+    Default wait is 300s. After completion, clicks the 「操作成功」 modal 「确定」.
     Always ask the user first using the confirmation summary from goskin_run_skin.
     Calling with user_confirmed=false is a no-op refusal.
     """
@@ -162,7 +163,7 @@ def goskin_run_auto(
     menu: str = "自动蒙皮",
     item: str = "GoSkinning",
     open_wait_s: float = 8.0,
-    complete_timeout_s: float = 180.0,
+    complete_timeout_s: float = 300.0,
     click_start: bool = False,
     auto_cleanup: bool = True,
     ocr_base: str = "",
