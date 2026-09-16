@@ -532,31 +532,48 @@ def make_structured_tool(
 
     @wraps(fn)
     def wrapped(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        from .helpers.audit_log import (
+            audit_maybe,
+            bind_user_id,
+            reset_user_id,
+        )
+
+        user_token = None
+        call_kwargs = dict(kwargs)
+        if "user_id" in call_kwargs:
+            user_token = bind_user_id(call_kwargs.pop("user_id"))
         if before_call:
             before_call()
         started_at = time.perf_counter()
-        script = _script_from_call(tool_name, args, kwargs)
+        script = _script_from_call(tool_name, args, call_kwargs)
         try:
-            raw = fn(*args, **kwargs)
+            raw = fn(*args, **call_kwargs)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
             transport = transport_provider() if transport_provider else None
-            return envelope_result(
+            envelope = envelope_result(
                 raw,
                 elapsed_ms=elapsed_ms,
                 transport=transport,
                 tool_name=tool_name,
                 script=script,
             )
+            audit_maybe(tool_name, args, call_kwargs, envelope, transport=transport)
+            return envelope
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
             transport = transport_provider() if transport_provider else None
-            return envelope_exception(
+            envelope = envelope_exception(
                 exc,
                 elapsed_ms=elapsed_ms,
                 transport=transport,
                 tool_name=tool_name,
                 script=script,
             )
+            audit_maybe(tool_name, args, call_kwargs, envelope, transport=transport)
+            return envelope
+        finally:
+            if user_token is not None:
+                reset_user_id(user_token)
 
     wrapped.__signature__ = fn_signature  # type: ignore[attr-defined]
     wrapped.__annotations__ = resolved_annotations

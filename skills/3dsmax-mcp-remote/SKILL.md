@@ -1,30 +1,38 @@
 ---
-name: 3dsmax-mcp-dev
+name: 3dsmax-mcp-remote
 description: >-
-  Local/maintainer guide for 3ds Max MCP: tool choice, MAXScript pitfalls, GoSkin.
-  Use with a full repo checkout (maxmcp available). Remote agent hosts should use
-  the 3dsmax-mcp-remote skill instead.
+  Remote agent guide for 3ds Max via HTTP MCP: tool choice, GoSkin OCR flows,
+  and stdlib helper scripts (list instances, viewport capture, upload, goskin_dev).
+  Use on agent host A talking to MCP server B — no local maxmcp install.
 ---
 
-# 3ds Max MCP — Local / Maintainer Guide
+# 3ds Max MCP — Remote Agent Guide
 
-## Deployment: local skill vs remote skill
-
-| Package | Audience | Contents |
-|---------|----------|----------|
-| **`3dsmax-mcp-remote`** | Agent host **A** (HTTP to B) | Docs + stdlib HTTP helper scripts — **install this on A** |
-| **`3dsmax-mcp-dev` (this skill)** | Developer with full repo | Docs; probes stay in repo `dialog_monitor/` (needs `maxmcp`) |
-
-Typical split — **Agent (A) / MCP server (B) / Max (C)**:
+## Deployment: remote skill (A) vs MCP server (B)
 
 | Host | Role | Install |
 |------|------|---------|
-| **A** | Agent | **`3dsmax-mcp-remote`** + MCP client → **B** |
-| **B** | 3dsmax-mcp server | Full product |
-| **C** | 3ds Max | Max + bridge |
+| **A** | Agent | **This skill** (`3dsmax-mcp-remote`: docs + HTTP `scripts/`) + MCP client → **B** |
+| **B** | 3dsmax-mcp server | Full product (tools + `dialog_monitor` implementation) |
+| **C** | 3ds Max | Max + bridge; TCP reachable from **B** |
 
-- This local package does **not** ship runnable `dialog_monitor` Python. See [scripts/dialog_monitor/README.md](scripts/dialog_monitor/README.md).
-- Maintainer runners: `uv run python dialog_monitor/_test_goskin_*.py` from the **repo root**.
+- Drive Max **only** through B (MCP tools or the HTTP helper scripts below). Never `import maxmcp` on A.
+- Maintainer / local-checkout skill is **`3dsmax-mcp-dev`** (separate package). Repo `dialog_monitor/_probe_*.py` stays in the full product tree.
+
+## Agent helper scripts (prefer for common tasks)
+
+**Default path:** call MCP tools through the client’s **already-configured** 3dsmax-mcp server (Cursor/Claude `mcp.json` / IDE MCP settings). Do **not** invent `http://127.0.0.1:8000/mcp` or any other URL.
+
+**Optional CLI scripts** (same skill `scripts/` dir) talk to that **same** HTTP endpoint. Only set `MAXMCP_URL` (or `--url`) to the URL already used by the MCP client — never a guessed localhost.
+
+| Task | Prefer MCP tool | Or script (needs `MAXMCP_URL` = client’s B URL) |
+|------|-----------------|--------------------------------------------------|
+| List online Max instances | `list_instances` | `python list_online_instances.py` |
+| Viewport screenshot | `capture_viewport` (+ download) | `python capture_viewport_shot.py --out shot.png` |
+| Upload file to workspace | `workspace_upload` / HTTP `/files/upload` | `python upload_to_mcp.py <path>` |
+| GoSkin prepare (no 开始蒙皮) | `goskin_*` | `python goskin_dev_flow.py --instance <name>` |
+
+Details: [scripts/README.md](scripts/README.md). Scripts are stdlib HTTP only (no `maxmcp`). If unsure of the URL, use MCP tools directly and skip the scripts.
 
 ## Tool Profile Routing
 

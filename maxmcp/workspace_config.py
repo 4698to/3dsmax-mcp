@@ -93,11 +93,62 @@ def get_shared_workspace() -> Optional[Path]:
 
 def clear_workspace_cache() -> None:
     get_shared_workspace.cache_clear()
+    shared_workspace_if_valid.cache_clear()
+
+
+def local_comms_dir() -> Path:
+    """Per-machine ``%TEMP%\\3dsmax-mcp`` (Max and Python each have their own)."""
+    return Path(tempfile.gettempdir()) / "3dsmax-mcp"
 
 
 def local_fallback_workspace() -> Path:
     """Per-machine temp workspace used only when no shared workspace is set."""
-    return Path(tempfile.gettempdir()) / "3dsmax-mcp" / "workspace"
+    return local_comms_dir() / "workspace"
+
+
+@lru_cache(maxsize=1)
+def shared_workspace_if_valid() -> Optional[Path]:
+    """Configured shared workspace that exists and is writable, else None.
+
+    Max should still *write* into ``%TEMP%\\3dsmax-mcp`` first (CJK UNC often
+    breaks ``save bmp``). Callers then copy into this directory when valid.
+    """
+    shared = get_shared_workspace()
+    if shared is None:
+        return None
+    try:
+        shared.mkdir(parents=True, exist_ok=True)
+        probe = shared / f".mcp_ws_probe_{uuid4().hex}"
+        probe.write_bytes(b"ok")
+        probe.unlink()
+        return shared
+    except OSError as exc:
+        logger.warning("Shared workspace not usable (%s): %s", shared, exc)
+        return None
+
+
+def copy_to_shared_if_valid(src: Path | str, dest_name: Optional[str] = None) -> Optional[Path]:
+    """Copy *src* into the shared workspace when that path is valid.
+
+    Returns the destination path, or None if not configured / not writable /
+    source missing. Does not delete the original (Max local temp stays).
+    """
+    shared = shared_workspace_if_valid()
+    if shared is None:
+        return None
+    source = Path(src)
+    if not source.is_file():
+        return None
+    name = dest_name or source.name
+    dest = shared / name
+    try:
+        import shutil
+
+        shutil.copy2(source, dest)
+        return dest
+    except OSError as exc:
+        logger.warning("Could not copy %s -> %s: %s", source, dest, exc)
+        return None
 
 
 def resolve_workspace_dir() -> Path:
@@ -115,11 +166,14 @@ def resolve_workspace_dir() -> Path:
 def workspace_info() -> dict:
     """Structured status for tools / diagnostics."""
     shared = get_shared_workspace()
+    valid = shared_workspace_if_valid() if shared is not None else None
     effective = resolve_workspace_dir()
     return {
         "shared_configured": shared is not None,
+        "shared_valid": valid is not None,
         "shared_workspace": str(shared) if shared is not None else None,
         "effective_workspace": str(effective),
+        "local_comms": str(local_comms_dir()),
         "source": (
             "MAXMCP_WORKSPACE"
             if (os.environ.get(ENV_WORKSPACE) or "").strip()
@@ -135,15 +189,14 @@ def ensure_workspace_dir(path: Optional[Path] = None) -> Path:
 
 
 def next_shared_capture_path(prefix: str = "dialog_monitor") -> Optional[str]:
-    """New PNG path under the shared workspace, or None if not configured.
+    """Destination PNG under a *valid* shared workspace, or None.
 
-    Returned with forward slashes for MAXScript. Caller must only use this when
-    Max can write the same path (UNC/share mounted on the Max host).
+    Max should write the original into ``%TEMP%\\3dsmax-mcp`` then copy here.
+    Returned with forward slashes for MAXScript.
     """
-    shared = get_shared_workspace()
+    shared = shared_workspace_if_valid()
     if shared is None:
         return None
-    ensure_workspace_dir(shared)
     name = f"{prefix}_{uuid4().hex}.png"
     return str((shared / name).resolve()).replace("\\", "/")
 

@@ -2,6 +2,7 @@ import configparser
 import logging
 import os
 import sys
+import tempfile
 from importlib import import_module
 from functools import lru_cache
 from pathlib import Path
@@ -106,7 +107,17 @@ client = SessionRoutedClient()
 # (or MAXMCP_WORKSPACE) so Max hosts and Python share one directory. When that
 # is unset there is no shared workspace — fall back to a per-machine TEMP dir
 # (same-host only).
+#
+# Viewport / screen captures always land under COMMS_DIR (%TEMP%/3dsmax-mcp),
+# which is also served over HTTP /files so agents can use download_url without
+# configuring a shared workspace.
 from .workspace_config import resolve_workspace_dir, workspace_info
+
+COMMS_DIR = Path(tempfile.gettempdir()) / "3dsmax-mcp"
+try:
+    COMMS_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    logging.warning("Could not create comms dir %s", COMMS_DIR)
 
 WORKSPACE_DIR = resolve_workspace_dir()
 try:
@@ -115,10 +126,11 @@ except OSError:
     logging.warning("Could not create workspace dir %s", WORKSPACE_DIR)
 _ws = workspace_info()
 logging.info(
-    "Workspace: shared=%s path=%s source=%s",
+    "Workspace: shared=%s path=%s source=%s comms=%s",
     _ws["shared_configured"],
     _ws["effective_workspace"],
     _ws["source"],
+    COMMS_DIR,
 )
 
 if __name__ == "__main__" and __spec__ is not None:
@@ -157,6 +169,7 @@ _READ_ONLY_TOOLS = {
     "capture_multi_view",
     "capture_screen",
     "check_dialog_ocr_health",
+    "get_max_window_state",
     "recognize_plugin_dialog",
     "get_effects",
     "get_state_sets",
@@ -200,6 +213,25 @@ _DESTRUCTIVE_TOOLS = {
     "mcg_reload_operators",
 }
 
+# Non-destructive tools that still need an audit trail.
+_AUDIT_EXTRA = {
+    "goskin_confirm_start",
+    "goskin_run_skin",
+    "goskin_run_auto",
+    "click_plugin_dialog_button",
+    "click_plugin_menu_path",
+    "restore_max_window",
+    "acquire_instance",
+    "release_instance",
+    "load_scene",
+    "manage_scene",
+    "render_scene",
+    "execute_maxscript",
+    "execute_python",
+}
+
+_AUDIT_TOOLS = _DESTRUCTIVE_TOOLS | _AUDIT_EXTRA
+
 _IDEMPOTENT_TOOLS = {
     "cosmos_search",
     "cosmos_download",
@@ -222,6 +254,7 @@ _IDEMPOTENT_TOOLS = {
     "capture_viewport",
     "capture_multi_view",
     "capture_screen",
+    "get_max_window_state",
     "select_objects",
     "set_visibility",
     "mcg_get_context",
@@ -504,6 +537,9 @@ def max_assistant() -> str:
         "For plugin UI that has no MaxScript API, use recognize_plugin_dialog / "
         "click_plugin_dialog_button / click_plugin_menu_path (OCR + mouse). "
         "Check check_dialog_ocr_health first if OCR fails.\n"
+        "Important tool calls are audited to %TEMP%/3dsmax-mcp/audit/*.jsonl. "
+        "You may pass optional user_id inside tools/call arguments (not in each tool schema) "
+        "to tag the acting user; see docs/AUDIT.md and get_file_service_info.\n"
         "MCP tool replies are structured objects: `{ok, result}` on success, `{ok, error}` on failure, optional top-level `hint` (`message`, `suggested_tools`, `next`). Transport only when present on errors. Set MCP_TRIPBACK_MODE=full for elapsed_ms and full transport metadata.\n"
         "If ok is false, read error.message and any hint.suggested_tools before retrying or choosing a fallback.\n"
         f"Reference resource: {SKILL_RESOURCE_URI}\n"

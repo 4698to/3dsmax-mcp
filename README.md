@@ -18,7 +18,7 @@ Automate everything!
 - **160 MCP tools** — For scene reads, modeling, materials, modifiers, controllers, viewport capture, procedural graphs, and plugin workflows.
 - **Native Bridge** — only 2023-2027 versions.
 - **Introspection** — discover arbitrary Max classes for all kinds of automation and scripting purposes. 
-- **Bundled agent skill** — There is a bundled maxscript documentation if you want to create your own tools.
+- **Bundled agent skills** — **Remote** (`3dsmax-mcp-remote`, default): docs + HTTP helper scripts for agent host A. **Local** (`3dsmax-mcp-dev`): maintainer docs. Rebuild with `build_skill_package.bat` / `python scripts/build_skill.py --profile remote|local|both`. See [Advanced configuration](docs/ADVANCED.md#agent-skill).
 
 ## Requirements
 
@@ -318,7 +318,7 @@ and existing procedural skies use the provider's dome or environment binding.
 |------|-------------|
 | `agent_viewport` | Independent floating agent view, visual targeting and V-Ray preview controls |
 | `set_viewport` | Position and frame the agent or user viewport |
-| `capture_viewport` | Capture the agent or user viewport as an image |
+| `capture_viewport` | Capture the agent or user viewport as an image. Keep Max visible: on older TCP bridges (e.g. Max 2015) minimized `gw.getViewportDib()` still succeeds but returns a 16×16 placeholder — call `restore_max_window` first, or use `render_scene`. Over streamable-http, results include `download_url` for files under `%TEMP%/3dsmax-mcp` (no shared workspace required) |
 | `capture_multi_view` | Capture several views into one image, with agent-view restoration |
 | `capture_screen` | Capture visible desktop pixels or crop to the V-Ray frame buffer |
 | `render_scene` | Render the current view |
@@ -432,10 +432,11 @@ and existing procedural skies use the provider's dome or environment binding.
 
 ## Skill & reference
 
-The installer builds an agent skill from `skills/3dsmax-mcp-dev/SKILL.md` with tool-choice rules, material pipeline notes, and MAXScript reference files. Rebuild manually with `python scripts/build_skill.py` — see [Advanced configuration](docs/ADVANCED.md#agent-skill).
+Two skill packages: **remote** (`3dsmax-mcp-remote`, for agent host A with HTTP helpers) and **local** (`3dsmax-mcp-dev`, maintainer docs). Shared references are authored under `skills/3dsmax-mcp-dev/`. Rebuild with `python scripts/build_skill.py --profile remote|local|both` or `build_skill_package.bat`. See [Advanced configuration](docs/ADVANCED.md#agent-skill).
 
 ## Further reading
 
 - **[Advanced configuration](docs/ADVANCED.md)** — architecture, safe mode, tool profiles, native builds
+- **[Audit log](docs/AUDIT.md)** — important-operation JSONL log and optional `user_id`
 - **[CHANGELOG.md](docs/CHANGELOG.md)** — release history
 - **[LICENSE](LICENSE)**

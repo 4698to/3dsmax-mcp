@@ -17,7 +17,9 @@ from dialog_monitor.ocr_client import OcrError, health as ocr_health
 from dialog_monitor.click_button import (
     click_dialog_button as _click_dialog_button,
     click_menu_path as _click_menu_path,
+    max_window_state as _max_window_state,
     recognize_dialog as _recognize_dialog,
+    restore_max_window as _restore_max_window,
 )
 
 
@@ -58,6 +60,37 @@ def _workspace_status() -> dict[str, Any]:
         return workspace_info()
     except Exception as exc:
         return {"shared_configured": False, "error": str(exc)}
+
+
+@mcp.tool()
+def get_max_window_state() -> dict[str, Any]:
+    """Read whether the 3ds Max main window is minimized / visible.
+
+    Returns hwnd, show_cmd, iconic, visible. Use before capture_viewport on older
+    TCP bridges: minimized Nitrous captures collapse to a 16×16 placeholder.
+    """
+    return _max_window_state(client=client)
+
+
+@mcp.tool()
+def restore_max_window(
+    restore_mode: str = "restore",
+    set_foreground: bool = True,
+    redraw: bool = True,
+) -> dict[str, Any]:
+    """Restore the 3ds Max main window from the taskbar (ShowWindow).
+
+    restore_mode: restore | normal | maximize | minimize | show.
+    Default restore returns the previous size; maximize forces fullscreen.
+    Call this before capture_viewport when Max is minimized. Requires an unlocked
+    interactive desktop (locked / disconnected RDP may report ok without effect).
+    """
+    return _restore_max_window(
+        restore_mode=restore_mode,
+        set_foreground=set_foreground,
+        redraw=redraw,
+        client=client,
+    )
 
 
 @mcp.tool()

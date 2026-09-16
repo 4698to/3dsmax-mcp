@@ -29,6 +29,8 @@ path = \\fileserver\share\3dsmax-mcp\workspace
 | Tool | 作用 |
 |------|------|
 | `check_dialog_ocr_health` | OCR 健康检查 + workspace 状态 |
+| `get_max_window_state` | 读 Max 主窗口是否最小化 / 可见 |
+| `restore_max_window` | 从任务栏还原 / 最大化 Max 主窗口（抓视口前用） |
 | `recognize_plugin_dialog` | 找对话框并 OCR（不点击） |
 | `click_plugin_dialog_button` | 对话框按钮 OCR 点击 |
 | `click_plugin_menu_path` | 菜单栏 → 弹出项 两步点击 |

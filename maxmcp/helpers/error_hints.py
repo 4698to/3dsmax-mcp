@@ -90,7 +90,7 @@ MAXSCRIPT_SUGGESTION_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] 
     (
         re.compile(
             r"\bholdMaxFile\b|\bfetchMaxFile\b|\bresetMaxFile\b|\bsaveMaxFile\b|"
-            r"\bMCP_SceneManage\.(holdState|fetchState|resetScene|saveScene|getInfo|saveOlderVersion)\b",
+            r"\bMCP_SceneManage\.(holdState|fetchState|resetScene|saveScene|getInfo)\b",
             re.IGNORECASE,
         ),
         ("manage_scene",),

@@ -113,62 +113,68 @@ struct SceneManageStruct
 		resetMaxFile #noPrompt
 		"Scene reset to empty"
 	),
+	fn get_system_temp_dir =
+	(
+		local temp_dir = sysInfo.tempdir
+		if temp_dir == undefined or temp_dir == "" do temp_dir = (getDir #temp)
+		temp_dir = substituteString temp_dir "\\" "/"
+		if temp_dir[temp_dir.count] != "/" do temp_dir += "/"
+		temp_dir
+	),
 
-	-- Save the current scene back to its file path.
-	-- Returns the saved path, or "NO_FILE" when the scene was never saved.
+	-- ASCII local dir: %TEMP%\\3dsmax-mcp\\ (created if missing).
+	fn getCommsDir =
+	(
+		local dir = this.get_system_temp_dir() + @"3dsmax-mcp/"
+		makeDir dir all:true
+		dir
+	),
+
+	-- Save as 3 major versions older when the year is known (e.g. Max 2022 -> 2019).
+	-- Unnamed scenes get a random path under %TEMP%\\3dsmax-mcp\\.
+	-- NOTE: do not name this `saveAsVersion` — that collides with saveMaxFile().
 	fn saveScene =
 	(
 		local fp = maxFilePath + maxFileName
-		if fp == "" then(
-			"NO_FILE"
+		if maxFileName == "" or fp == "" then
+		(
+			local guid = ((dotNetClass "System.Guid").NewGuid()).ToString("N")
+			fp = this.getCommsDir() + "scene_" + guid + ".max"
 		)
 		else
 		(
-			saveMaxFile fp
-			fp
+			fp = substituteString fp "\\" "/"
 		)
-	),
 
-	-- Save the current scene as a file 3 major versions older than the
-	-- running 3ds Max (e.g. Max 2022 -> saved as Max 2019).
-	-- The copy is written to <name>_v<year>.max and does NOT overwrite
-	-- the original. Returns the new file path, or "NO_FILE" / "ERROR: ...".
-	-- NOTE: member name must NOT be `saveAsVersion` — that would collide
-	-- with the `saveAsVersion:` keyword of saveMaxFile() inside this body.
-	fn saveOlderVersion =
-	(
-		local fp = maxFilePath + maxFileName
-		if fp == "" then
-			return "NO_FILE"
-
-		-- 确定当前版本年份（Max 2022 的 maxVersion() 为数组，[8]=2022；
-		-- 旧版返回整数主版本，17 = Max 2015，年份 = 主版本 + 1998）
-		local mv = maxVersion()
-		local curYear = 0
-		if classOf mv == Array then
+		local mv = maxVersion() -- 低版本max 格式 #(17000, 44, 0)
+		local curYear = ((mv[1] * 0.001) as integer) + 1998
+		
+		local dest = fp
+		local targetYear = 0
+		if curYear > 0 then
 		(
-			-- 优先取数组中的年份元素（2010..2100 范围）
-			curYear = mv[8]
+			targetYear = curYear - 3
+			if targetYear < 2012 do (targetYear = 2012)
+			
 		)
-		else(
-			curYear = mv + 1998
-		)
-
-		if curYear <= 0 do(
-			return "ERROR: cannot determine current 3ds Max version"
-		)
-
-		local targetYear = curYear - 3
-		if targetYear < 2012 do targetYear = 2012  -- 最低支持到 3ds Max 2012
-
-		local newFp = \
-			(getFilenamePath fp) + (getFilenameFile fp) + \
-			"_v" + (targetYear as string) + (getFilenameType fp)
 
 		local saved = false
-		-- 新版（2016+）：saveMaxFile 原生 saveAsVersion:<年份> 参数（EMxsMaxFileVersion）
-		saved = saveMaxFile newFp saveAsVersion:targetYear quiet:true
-		if saved then newFp else "ERROR: save failed"
+		try
+		(
+			if targetYear > 0 then
+			(
+				saved = saveMaxFile dest saveAsVersion:targetYear quiet:true
+			)
+			else
+			(
+				saved = saveMaxFile dest quiet:true
+			)
+		)
+		catch
+		(
+			return ("ERROR: save failed: " + (getCurrentException() as string))
+		)
+		if saved then dest else ("ERROR: saveMaxFile returned false: " + dest)
 	),
 
 	-- Basic scene info as a JSON-ish string.

@@ -88,6 +88,8 @@ def upload_scene_and_capture(
         with open(dst, "rb") as fh:
             png_b64 = base64.b64encode(fh.read()).decode("ascii")
 
+    download_url = capture.get("download_url") or f"{_base_url()}/files/{quote(base, safe='')}"
+
     return {
         "scene": scene_result,
         "file_name": up["name"],
@@ -95,7 +97,7 @@ def upload_scene_and_capture(
         "upload_size": up["size"],
         "capture_file": capture_file,
         "capture_name": base,
-        "download_url": f"{_base_url()}/files/{quote(base, safe='')}",
+        "download_url": download_url,
         "png_size": png_size,
         "png_b64": png_b64,
         "attempts": attempts,

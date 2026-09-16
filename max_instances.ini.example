@@ -19,12 +19,13 @@
 # 共享 workspace（可选）
 # ---------------------------------------------------------------------------
 # 所有 3ds Max 主机与 Python MCP 主机必须能读写同一路径（推荐 UNC）。
-# 用于截图 OCR、上传下载等跨机文件交接。
+# Max 侧产物（截图等）始终先写本机 %TEMP%\3dsmax-mcp；仅当此路径有效可写时再复制过来。
+# 用于 OCR、上传下载等跨机文件交接。
 #
 # 解析优先级:
 #   1. 环境变量 MAXMCP_WORKSPACE
 #   2. 本文件 [workspace] path=
-# 未配置 = 不存在共享 workspace（仅本机 TEMP 回退，跨机读不到 Max 截图）。
+# 未配置 / 不可用 = 只留本机 %TEMP%\3dsmax-mcp（跨机读不到 Max 截图）。
 #
 # [workspace]
 # path = \\fileserver\share\3dsmax-mcp\workspace

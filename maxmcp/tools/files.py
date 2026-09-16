@@ -3,26 +3,41 @@
 3ds Max runs on a remote machine. This module exposes plain HTTP routes on the
 same FastMCP server so the client can upload assets (textures, models, ...) into
 the shared workspace and download Max-generated results (renders, exports, ...)
-without base64 overhead through the MCP channel. All files live under
-``%TEMP%/3dsmax-mcp/workspace``; Max scripts consume the returned *local*
-absolute path directly (the Max sandbox itself can only read local files).
+without base64 overhead through the MCP channel.
+
+Served roots (GET ``/files/{name}``):
+  1. ``WORKSPACE_DIR`` — uploads + optional shared ``[workspace]`` path
+  2. ``COMMS_DIR`` (``%TEMP%/3dsmax-mcp``) — viewport/screen captures and spilled
+     payloads, always available even when no shared workspace is configured
+  3. ``COMMS_DIR/payloads`` — oversized tool-envelope binaries
+
+Uploads still write only to ``WORKSPACE_DIR``. Max scripts consume returned
+*local* absolute paths (the Max sandbox itself can only read local files).
 """
+
+from __future__ import annotations
 
 import json
 import os
 import uuid
 from base64 import b64decode, b64encode
+from urllib.parse import quote
 
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
-from ..server import WORKSPACE_DIR, mcp
+from ..helpers.file_http import (
+    base_url as _base_url,
+    file_download_url as _file_download_url,
+    iter_served_files,
+    resolve_download,
+    sanitize_filename,
+)
+from ..server import COMMS_DIR, WORKSPACE_DIR, mcp
 
 #: Maximum multipart part size accepted for uploads (1 GB) - large EXR/FBX/ABC
 #: assets must be transferable.
 _MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
-
-_ILLEGAL_CHARS = set('<>:"/\\|?*')
 
 #: Extensions that browsers can render inline; served without Content-Disposition
 #: so a plain GET shows the image instead of forcing a download.
@@ -33,41 +48,31 @@ def _ensure_workspace() -> None:
     os.makedirs(WORKSPACE_DIR, exist_ok=True)
 
 
+def _ensure_comms() -> None:
+    os.makedirs(COMMS_DIR, exist_ok=True)
+    os.makedirs(os.path.join(COMMS_DIR, "payloads"), exist_ok=True)
+
+
 def _sanitize_filename(name: str) -> str:
-    """Keep only the basename and drop characters Windows forbids in paths."""
-    base = os.path.basename(name.replace("\\", "/"))
-    cleaned = "".join("_" if c in _ILLEGAL_CHARS else c for c in base).strip()
-    if not cleaned or cleaned in {".", ".."}:
-        raise ValueError(f"invalid filename: {name!r}")
-    return cleaned
+    return sanitize_filename(name)
 
 
 def _resolve_in_workspace(name: str) -> str:
     """Resolve a name inside WORKSPACE_DIR, rejecting path traversal."""
-    root = os.path.realpath(WORKSPACE_DIR)
+    root = os.path.realpath(str(WORKSPACE_DIR))
     target = os.path.realpath(os.path.join(root, os.path.basename(name)))
     if not (target == root or target.startswith(root + os.sep)):
         raise ValueError(f"invalid filename: {name!r}")
     return target
 
 
-def _host_ip() -> str:
-    """Best-effort LAN IP so remote clients can reach the file routes."""
-    import socket
-
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-        finally:
-            s.close()
-    except OSError:
-        return "127.0.0.1"
+def _resolve_download(name: str) -> str:
+    return resolve_download(name, workspace_dir=WORKSPACE_DIR, comms_dir=COMMS_DIR)
 
 
-def _base_url() -> str:
-    return f"http://{_host_ip()}:8000"
+def file_download_url(path: str | os.PathLike[str] | None) -> str | None:
+    """Return a GET /files/{basename} URL when *path* is under a served root."""
+    return _file_download_url(path, workspace_dir=WORKSPACE_DIR, comms_dir=COMMS_DIR)
 
 
 @mcp.custom_route("/files/upload", methods=["POST"])
@@ -95,19 +100,20 @@ async def upload_file(request: Request) -> Response:
             "name": stored_name,
             "size": os.path.getsize(dest),
             "local_path": dest,
-            "url": f"{_base_url()}/files/{stored_name}",
+            "url": f"{_base_url()}/files/{quote(stored_name, safe='')}",
         }
     )
 
 
 @mcp.custom_route("/files/{filename}", methods=["GET"])
 async def download_file(request: Request) -> Response:
-    """Download a file from the workspace by name."""
-    _ensure_workspace()
+    """Download a file from the workspace or ``%TEMP%/3dsmax-mcp`` by basename."""
     try:
-        path = _resolve_in_workspace(request.path_params["filename"])
+        path = _resolve_download(request.path_params["filename"])
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+    except FileNotFoundError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
     if not os.path.isfile(path):
         return JSONResponse({"error": "not found"}, status_code=404)
     # Serving with filename= sets Content-Disposition: attachment (download).
@@ -119,32 +125,34 @@ async def download_file(request: Request) -> Response:
 
 @mcp.custom_route("/files", methods=["GET"])
 async def list_files(request: Request) -> Response:
-    """List workspace files. Default: HTML page with download links; append
-    ``?format=json`` for a machine-readable listing."""
+    """List workspace + ``%TEMP%/3dsmax-mcp`` files.
+
+    Default: HTML page with download links; append ``?format=json`` for JSON.
+    """
     _ensure_workspace()
-    entries = []
-    for name in sorted(os.listdir(WORKSPACE_DIR)):
-        full = os.path.join(WORKSPACE_DIR, name)
-        if os.path.isfile(full):
-            entries.append(
-                {
-                    "name": name,
-                    "size": os.path.getsize(full),
-                    "url": f"{_base_url()}/files/{name}",
-                }
-            )
+    _ensure_comms()
+    entries = list(iter_served_files(WORKSPACE_DIR, COMMS_DIR))
 
     if request.query_params.get("format") == "json":
-        return JSONResponse({"files": entries})
+        return JSONResponse(
+            {
+                "workspace": str(WORKSPACE_DIR),
+                "comms": str(COMMS_DIR),
+                "files": entries,
+            }
+        )
 
     rows = "".join(
-        f'<li><a href="/files/{name}">{name}</a> ({size} bytes)</li>'
-        for name, size in [(e["name"], e["size"]) for e in entries]
+        f'<li><a href="/files/{quote(e["name"], safe="")}">{e["name"]}</a> '
+        f'({e["size"]} bytes)</li>'
+        for e in entries
     )
     html = (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        "<title>3dsmax-mcp workspace</title></head><body>"
-        f"<h1>3dsmax-mcp workspace</h1><ul>{rows or '<li>(empty)</li>'}</ul>"
+        "<title>3dsmax-mcp files</title></head><body>"
+        f"<h1>3dsmax-mcp files</h1>"
+        f"<p>workspace: {WORKSPACE_DIR}<br>comms: {COMMS_DIR}</p>"
+        f"<ul>{rows or '<li>(empty)</li>'}</ul>"
         "</body></html>"
     )
     return HTMLResponse(html)
@@ -160,15 +168,29 @@ def get_file_service_info() -> dict:
     path directly. When ``shared_configured`` is true, the path comes from
     max_instances.ini [workspace] (or MAXMCP_WORKSPACE) and must be writable
     by every Max host and the Python MCP host.
+
+    ``comms`` (``%TEMP%/3dsmax-mcp``) is always served for viewport captures
+    even when no shared workspace is configured. Important tool calls are
+    audited under ``comms/audit``; optional ``user_id`` may be passed inside
+    ``tools/call`` arguments (see docs/AUDIT.md).
     """
+    from ..helpers.audit_log import audit_dir
+    from ..helpers.file_http import download_roots
     from ..workspace_config import workspace_info
 
     _ensure_workspace()
+    _ensure_comms()
     base = _base_url()
     info = workspace_info()
+    audit_path = audit_dir()
+    try:
+        audit_path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
     return {
         "base_url": base,
         "workspace": str(WORKSPACE_DIR),
+        "comms": str(COMMS_DIR),
         "shared_configured": info["shared_configured"],
         "shared_workspace": info["shared_workspace"],
         "workspace_source": info["source"],
@@ -176,6 +198,29 @@ def get_file_service_info() -> dict:
         "list_url": f"{base}/files",
         "download_url_template": f"{base}/files/{{filename}}",
         "upload_method": "POST multipart form field 'file'",
+        "download_roots": download_roots(WORKSPACE_DIR, COMMS_DIR),
+        "audit": {
+            "dir": str(audit_path),
+            "enabled_env": "MAXMCP_AUDIT",
+            "default_enabled": True,
+            "user_id_argument": (
+                "optional string in tools/call arguments (not in tool schemas); "
+                "see docs/AUDIT.md"
+            ),
+            "fields": [
+                "ts",
+                "date",
+                "user_id",
+                "tool",
+                "audit_reason",
+                "scene_path",
+                "ok",
+                "elapsed_ms",
+                "args",
+                "error",
+                "transport",
+            ],
+        },
     }
 
 
@@ -209,7 +254,7 @@ def workspace_upload(file_name: str, data_b64: str) -> str:
             "name": safe,
             "size": len(raw),
             "local_path": dest,
-            "url": f"{_base_url()}/files/{safe}",
+            "url": f"{_base_url()}/files/{quote(safe, safe='')}",
         },
         ensure_ascii=False,
     )
@@ -217,28 +262,28 @@ def workspace_upload(file_name: str, data_b64: str) -> str:
 
 @mcp.tool()
 def workspace_download(file_name: str) -> str:
-    """Download a workspace file as base64-encoded content.
+    """Download a workspace or ``%TEMP%/3dsmax-mcp`` file as base64.
 
-    Use this to fetch Max-generated results (renders, exports, ...) back to
-    the client. The file must already exist in ``workspace`` on the 3ds Max
-    machine (Max scripts can write there directly).
+    Use this to fetch Max-generated results (renders, viewport captures, ...)
+    back to the client. Looks up the basename under the shared workspace and
+    under ``%TEMP%/3dsmax-mcp`` (and ``payloads/``).
 
     Args:
-        file_name: Name of the file in the workspace.
+        file_name: Basename of the file.
     """
-    _ensure_workspace()
     try:
-        path = _resolve_in_workspace(file_name)
+        path = _resolve_download(file_name)
     except ValueError as exc:
         raise ValueError(str(exc)) from exc
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"{file_name!r} not found in workspace {WORKSPACE_DIR}")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(str(exc)) from exc
     with open(path, "rb") as fh:
         raw = fh.read()
     return json.dumps(
         {
             "name": os.path.basename(path),
             "size": len(raw),
+            "local_path": path,
             "data_b64": b64encode(raw).decode("ascii"),
         },
         ensure_ascii=False,
@@ -247,18 +292,15 @@ def workspace_download(file_name: str) -> str:
 
 @mcp.tool()
 def workspace_list_files() -> str:
-    """List the files currently stored in the shared workspace."""
+    """List files in the shared workspace and ``%TEMP%/3dsmax-mcp``."""
     _ensure_workspace()
-    entries = []
-    for name in sorted(os.listdir(WORKSPACE_DIR)):
-        full = os.path.join(WORKSPACE_DIR, name)
-        if os.path.isfile(full):
-            entries.append(
-                {
-                    "name": name,
-                    "size": os.path.getsize(full),
-                    "local_path": full,
-                    "url": f"{_base_url()}/files/{name}",
-                }
-            )
-    return json.dumps({"workspace": str(WORKSPACE_DIR), "files": entries}, ensure_ascii=False)
+    _ensure_comms()
+    entries = list(iter_served_files(WORKSPACE_DIR, COMMS_DIR))
+    return json.dumps(
+        {
+            "workspace": str(WORKSPACE_DIR),
+            "comms": str(COMMS_DIR),
+            "files": entries,
+        },
+        ensure_ascii=False,
+    )

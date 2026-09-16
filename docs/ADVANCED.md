@@ -195,19 +195,30 @@ TCP fallback is opt-in via the **MCP Start** macroscript. `tcp_idle_poll_interva
 
 ## Agent skill
 
-The skill teaches agents tool choice, material workflows, controller paths, and MAXScript pitfalls. The installer builds and deploys it automatically.
+Two packages:
+
+| Profile | Folder / zip | Audience |
+|---------|--------------|----------|
+| **remote** (default) | `dist/3dsmax-mcp-remote/`, `3dsmax-mcp-remote.skill` | Agent host **A** — docs + HTTP helper scripts (`MAXMCP_URL`) |
+| **local** | `dist/3dsmax-mcp-dev/`, `3dsmax-mcp-dev.skill` | Maintainer with full repo — docs only; probes in `dialog_monitor/` |
 
 Manual rebuild:
 
 ```powershell
-python scripts/build_skill.py
-python scripts/build_skill.py --target local    # project: .cursor/skills + .agents/skills
-python scripts/build_skill.py --target global   # user: ~/.cursor/skills, ~/.claude/skills, ~/.agents/skills
+python scripts/build_skill.py                          # remote, install both
+python scripts/build_skill.py --profile local
+python scripts/build_skill.py --profile both --target none
+build_skill_package.bat remote --target none           # zip for copying to A
 ```
 
-Cursor project skills are expected under `.cursor/skills/<name>/SKILL.md`. This repo keeps the source in `skills/3dsmax-mcp-dev/` and can junction/copy it into `.cursor/skills/3dsmax-mcp-dev` via `build_skill.py --target local`.
+Cursor project skills live under `.cursor/skills/<name>/SKILL.md`. Shared MAXScript / GoSkin markdown is authored under `skills/3dsmax-mcp-dev/` and copied into both packages at build time. MCP resource: `resource://3dsmax-mcp/skill`.
 
-Bundled MAXScript reference lives under `skills/3dsmax-mcp-dev/` (10 topic files). MCP resource: `resource://3dsmax-mcp/skill`.
+### Packaging for Agent (A) / MCP server (B) / Max (C)
+
+1. Build remote: `build_skill_package.bat remote --target none` (or `python scripts/build_skill.py --profile remote --target none`).
+2. Copy `dist/3dsmax-mcp-remote/` or `3dsmax-mcp-remote.skill` to **A** under `.cursor/skills/3dsmax-mcp-remote/`.
+3. On **A**, set MCP client to **B**'s HTTP endpoint and optionally `MAXMCP_URL` for skill scripts.
+4. Keep the full product on **B**; Max + bridge on **C**. Do **not** give A the local/dev skill expecting `maxmcp` or repo probes.
 
 Anthropic models sometimes prefer raw MAXScript over dedicated tools; Codex tends to use native tools more reliably. The skill reduces that gap.
 
@@ -251,6 +262,7 @@ python scripts/run_live_tool_smoke.py --tier read
 | `maxmcp/tools/` | MCP tool implementations |
 | `native/` | C++ GUP bridge |
 | `maxscript/` | Listener + autostart |
-| `skills/3dsmax-mcp-dev/` | Agent skill source |
-| `scripts/build_skill.py` | Skill archive builder and installer |
+| `skills/3dsmax-mcp-dev/` | Local/maintainer skill source + shared markdown refs |
+| `skills/3dsmax-mcp-remote/` | Remote skill source (SKILL.md + HTTP scripts) |
+| `scripts/build_skill.py` | Skill archive builder (`--profile remote|local|both`) |
 | `scripts/gen_tool_registry.py` | Native diagnostic tool registry |

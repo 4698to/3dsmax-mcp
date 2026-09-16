@@ -12,7 +12,7 @@ _MS_SCENE_ACTIONS = {
     "reset": "MCP_SceneManage.resetScene()",
     "save": "MCP_SceneManage.saveScene()",
     "info": "MCP_SceneManage.getInfo()",
-    "save_older": "MCP_SceneManage.saveOlderVersion()",
+    "save_older": "MCP_SceneManage.saveScene()",
 }
 
 
@@ -57,8 +57,11 @@ def manage_scene(action: str) -> str:
     """Manage the 3ds Max scene state via MCP_SceneManage (or native hold/fetch/reset/save/info).
 
     Actions: hold, fetch, reset, save, info, save_older.
-    ``save_older`` writes a copy 3 major versions older and does not overwrite the original.
+    ``save`` / ``save_older`` both call ``MCP_SceneManage.saveScene`` (3 versions
+    older; unsaved scenes get a random name under ``%TEMP%\\3dsmax-mcp``).
     """
+    from ..helpers.audit_log import clear_scene_path_cache, note_scene_path
+
     action = action.lower().strip()
     if action not in _MS_SCENE_ACTIONS:
         return "Unknown action: {0}. Use hold, fetch, reset, save, info, or save_older.".format(
@@ -68,9 +71,15 @@ def manage_scene(action: str) -> str:
     if client.native_available and action in _NATIVE_SCENE_ACTIONS:
         payload = _json.dumps({"action": action})
         response = client.send_command(payload, cmd_type="native:manage_scene")
-        return response.get("result", "")
+        result = response.get("result", "")
+    else:
+        result = _call_scene_manage(_MS_SCENE_ACTIONS[action])
 
-    return _call_scene_manage(_MS_SCENE_ACTIONS[action])
+    if action == "reset":
+        note_scene_path(None)
+    elif action in {"save", "save_older", "fetch"}:
+        clear_scene_path_cache()
+    return result
 
 
 @mcp.tool()
@@ -84,12 +93,16 @@ def load_scene(file_path: str) -> str:
     Args:
         file_path: Absolute path to the .max file.
     """
+    from ..helpers.audit_log import note_scene_path
     from ..helpers.maxscript import safe_value
 
     fp = safe_value(file_path)
     if not fp.startswith("@"):
         fp = '@"' + fp.replace('"', '""') + '"'
-    return _call_scene_manage(f"MCP_SceneManage.loadScene {fp}")
+    result = _call_scene_manage(f"MCP_SceneManage.loadScene {fp}")
+    # Cache the requested path for audit lines (Max may still fail; best-effort).
+    note_scene_path(file_path)
+    return result
 
 
 @mcp.tool()

@@ -1,8 +1,9 @@
-# GoSkin OCR 模拟点击（案例说明）
+# GoSkin OCR 模拟点击（本地 / 维护者 + 服务端说明）
 
-在通过 OCR 鼠标点击自动化 **自动蒙皮 / GoSkinning**（Qt 对话框 `自动蒙皮4.*` / `*天晴数码`）之前，请完整阅读本文。
+完整说明：含 **B 服务器配置**、点击原理、以及仓库内 `_test_goskin_*` 冒烟。  
+远程 Agent（A）请优先读 **`3dsmax-mcp-remote`** 包内同名文档（无 ini、无 MaxClient）；本文件主要给 **运维 / 完整仓库维护者**。
 
-配套模块：`dialog_monitor/` · MCP 工具：`goskin_*`、`recognize_plugin_dialog`、`click_plugin_dialog_button`。
+配套实现（在 **MCP 服务端 B**）：`dialog_monitor/` · MCP 工具：`goskin_*`、`recognize_plugin_dialog`、`click_plugin_dialog_button`。
 
 ## 何时使用
 
@@ -30,7 +31,9 @@ Max 内部（`MCP_DialogMonitor.clickAtScreen`）：
 
 坐标链路：对话框快照 → OCR 框 → `image_to_screen`（优先使用 **client rect**；当图像高度大于客户区高度且宽度一致时，减去顶部 padding——用外层窗口映射会点偏列表行）。
 
-## 配置（`max_instances.ini`）
+## 配置（`max_instances.ini` — 仅 MCP 服务器 B）
+
+**Agent 主机 A 不编辑此文件。** 下面由 B 上运维配置；A 只调 `check_dialog_ocr_health` / `list_instances`。
 
 ```ini
 [instances]
@@ -47,7 +50,7 @@ base = http://192.168.139.130:8000
 |-----|------|
 | `[ocr] base` | HTTP OCR 根地址。优先级：工具参数 `ocr_base` > `MAXMCP_OCR_BASE` > ini > 内置默认值 |
 | Endpoints | `GET {base}/v1/ocr/health` · `POST {base}/v1/ocr` |
-| `[workspace]` | 跨机器 Max ↔ Python 的共享截图目录（同机或 HTTP 上传路径可用时可省略） |
+| `[workspace]` | 跨机共享目录。Max 先写 `%TEMP%\3dsmax-mcp`，有效可写时再复制到此路径（同机或 HTTP 上传可用时可省略） |
 
 探测：`check_dialog_ocr_health` → `ok`、`endpoints`、`workspace.shared_configured`。
 
@@ -116,36 +119,25 @@ Task Progress:
 | 点击 ok 但 OCR 无变化 | 锁屏 / RDP 断连 | 解锁可交互桌面 |
 | 警告弹窗 / UI 卡住 | 未聚焦列表槽位就点「选定」 | 点「确定」dismiss，再先聚焦「(选中后在编辑区添加)」 |
 | `mesh_not_added` | 槽位点偏、Y 映射错误、或选择为空 | 解锁后重跑；传入 mesh 名；检查 client-rect 映射 |
-| OCR 不可达 | `[ocr] base` 错误 / 防火墙 | 修正 ini / `MAXMCP_OCR_BASE`；重新健康检查 |
+| OCR 不可达 | `[ocr] base` 错误 / 防火墙 | 在 **B** 修正 ini / `MAXMCP_OCR_BASE`；重新健康检查 |
 | 截图全黑 / 无用 | snapshot 参数 / 会话状态 | 使用普通 `windows.snapshot`；保持会话可交互 |
 
-## 复用 `dialog_monitor/_test_goskin_*.py`（不要重复造轮子）
+## 维护者本机脚本（完整仓库，非 remote skill）
 
-**Agent 硬性规则：** 在为 GoSkin OCR 编写任何新的临时/冒烟脚本之前，先检查并 **复用** 已有的 `dialog_monitor/_test_goskin_*.py` 运行器。优先使用  
-`uv run python dialog_monitor/_test_goskin_<case>.py`，而不是聊天里随手写的一次性脚本。  
-若缺少某个用例，应扩展已有的 `_test_goskin_*` 文件（或按相同前缀新增），并更新下表——不要把经验只留在对话里。
+仅当本机有完整 `3dsmax-mcp` 仓库（或已安装 `maxmcp`），且能直连目标 Max 时使用。  
+**硬性规则：** 冒烟先复用 `_test_goskin_*.py`，不要聊天里随手新写一次性脚本。
 
 | 脚本 | 用途 | 默认 Max 目标 |
 |------|------|----------------|
 | `_test_goskin_ensure.py` | 仅冒烟 `ensure_goskin_ready` | 先试 `127.0.0.1`，再试 `192.168.139.45` |
-| `_test_goskin_prestart.py` | 完整准备到确认门禁（`click_start=False`）；绝不点「开始蒙皮」 | `127.0.0.1:8765` |
-| `_test_goskin_slotfocus.py` | 聚焦列表槽位 + 模型/骨骼「选定」；打印计数 | `192.168.139.45:8765` |
-| `_test_goskin_tabs.py` | 截一次 → OCR → 标签页/按钮点击冒烟 | 本地 client 辅助 |
-| `_test_goskin_user_scene.py` | 在远程 Max 复制/加载用户 `.max`，再跑到确认门禁 | `192.168.139.45:8765` |
-
-本机 prestart 示例（与 Max 同机）：
+| `_test_goskin_prestart.py` | 完整准备到确认门禁（`click_start=False`） | `127.0.0.1:8765` |
+| `_test_goskin_slotfocus.py` | 槽位 + 选定 | `192.168.139.45:8765` |
+| `_test_goskin_tabs.py` | 标签/按钮冒烟 | 本地 |
+| `_test_goskin_user_scene.py` | 远程加载用户场景再准备 | `192.168.139.45:8765` |
 
 ```bash
 uv run --directory <repo> python dialog_monitor/_test_goskin_prestart.py
 ```
-
-场景不同时，在所选脚本内修改 `mesh_names` / `bone_names` / `HOST`/`PORT`；除非用户已确认，否则保持 `click_start=False`。
-
-产物：多个脚本会在同目录写出 `_last_goskin_*.json`，便于 OCR/步骤调试。
-
-## 最小 Python 冒烟（库 API，与 Max 同机）
-
-仅在需要自定义一行调用时使用；否则优先 `_test_goskin_*`。
 
 ```python
 from maxmcp.max_client import MaxClient
@@ -153,23 +145,17 @@ from dialog_monitor.goskin_flow import ensure_goskin_ready, run_goskin_skin, con
 
 c = MaxClient(host="127.0.0.1", port=8765, transport="tcp")
 ensure_goskin_ready(c)
-prep = run_goskin_skin(
-    c,
-    mesh_names=["Box001"],
-    bone_names=["Bone001", "Bone002", "Bone003"],
-)  # click_start 默认 False
+prep = run_goskin_skin(c, mesh_names=["Box001"], bone_names=["Bone001", "Bone002", "Bone003"])
 print(prep["user_prompt"])
-# 用户确认后：
-# confirm_goskin_start(c, user_confirmed=True)
 ```
+
+远程 A 请用 `3dsmax-mcp-remote` 的 `scripts/goskin_dev_flow.py` 或 MCP `goskin_*`。
 
 ## 相关文件
 
-- `dialog_monitor/_test_goskin_*.py` — **可复用冒烟/运行器（优先使用）**  
-- `dialog_monitor/goskin_flow.py` — 编排流程  
-- `dialog_monitor/click_button.py` — 截图 / OCR / 点击原语  
-- `maxscript/mcp/mcp_dialog_monitor.ms` — Max 侧快照 + 鼠标辅助  
-- `maxmcp/tools/goskin.py` — MCP 封装  
-- `dialog_monitor/README.md` — 模块文档  
-- `README.zh-CN.md` — 面向用户的 GoSkin 说明  
-- `dialog_monitor\_run_goskin_local_unhidden.py` 给场景中未隐藏的模型和骨骼添加到 自动蒙皮 插件中 的标准案例
+- MCP 工具：`goskin_*`、`recognize_plugin_dialog`、`click_plugin_dialog_button`
+- `dialog_monitor/_test_goskin_*.py` — 维护者冒烟  
+- `dialog_monitor/goskin_flow.py` / `click_button.py` — B 侧实现  
+- `maxscript/mcp/mcp_dialog_monitor.ms` — C 侧  
+- `maxmcp/tools/goskin.py` — MCP 封装（B）  
+- `dialog_monitor/README.md` · `README.zh-CN.md`

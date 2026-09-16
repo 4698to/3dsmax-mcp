@@ -101,16 +101,18 @@ def _escape_ms_string(value: str) -> str:
 
 
 def max_temp_capture_outfile(client: Any, *, prefix: str = "dialog_monitor") -> str:
-    """ASCII path under Max getDir #temp — avoids CJK workspace paths that break save bmp."""
+    """ASCII path under Max ``%TEMP%\\3dsmax-mcp`` — not the shared workspace."""
     import time
 
     raw = _exec_ms(
         client,
         r'''(
-local dir = (getDir #temp)
-if dir == undefined or dir == "" do dir = sysInfo.tempdir
+local dir = sysInfo.tempdir
+if dir == undefined or dir == "" do dir = (getDir #temp)
 dir = substituteString dir "\\" "/"
 if dir[dir.count] != "/" do dir += "/"
+dir = dir + "3dsmax-mcp/"
+makeDir dir all:true
 dir
 )''',
         timeout=15.0,
@@ -124,7 +126,7 @@ dir
 
 
 def _shared_capture_outfile(prefix: str = "dialog_monitor") -> str | None:
-    """Path under shared workspace for Max to write, or None if not configured."""
+    """Copy destination under a *valid* shared workspace, or None."""
     try:
         from maxmcp.workspace_config import next_shared_capture_path
     except ImportError:
@@ -133,6 +135,50 @@ def _shared_capture_outfile(prefix: str = "dialog_monitor") -> str | None:
             sys.path.insert(0, str(repo_root))
         from maxmcp.workspace_config import next_shared_capture_path
     return next_shared_capture_path(prefix)
+
+
+def _copy_max_file_to_shared(client: Any, local_path: str) -> str | None:
+    """After Max wrote *local_path* under temp, copy to shared workspace if valid."""
+    src = str(local_path).replace("\\", "/")
+    try:
+        from maxmcp.workspace_config import copy_to_shared_if_valid
+    except ImportError:
+        repo_root = _MODULE_DIR.parent
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from maxmcp.workspace_config import copy_to_shared_if_valid
+    copied = copy_to_shared_if_valid(src)
+    if copied is not None:
+        return str(copied).replace("\\", "/")
+    dest = _shared_capture_outfile(Path(src).stem)
+    if not dest:
+        return None
+    dst = dest.replace("\\", "/")
+    parent = str(Path(dst).parent).replace("\\", "/")
+    raw = _exec_ms(
+        client,
+        f'(makeDir @"{parent}" all:true; if copyFile @"{src}" @"{dst}" then @"{dst}" else "ERROR")',
+        timeout=30.0,
+    ).strip().strip('"')
+    if raw and not raw.startswith("ERROR"):
+        return raw.replace("\\", "/")
+    return None
+
+
+def _promote_capture_file(client: Any, data: dict[str, Any]) -> dict[str, Any]:
+    """Keep Max local temp as source of truth; attach shared copy when possible."""
+    local = data.get("file") or ""
+    if not local or not data.get("ok", True):
+        data["shared_workspace"] = False
+        return data
+    data["local_file"] = str(local).replace("\\", "/")
+    copied = _copy_max_file_to_shared(client, local)
+    if copied:
+        data["file"] = copied
+        data["shared_workspace"] = True
+    else:
+        data["shared_workspace"] = False
+    return data
 
 
 def _callback_host_for_max() -> str:
@@ -360,10 +406,12 @@ def capture_dialog_meta(
         out_setup = f'local _dmOut = @"{_escape_ms_string(outfile)}"\n'
     else:
         out_setup = r'''
-local _dmDir = (getDir #temp)
-if _dmDir == undefined or _dmDir == "" do _dmDir = sysInfo.tempdir
+local _dmDir = sysInfo.tempdir
+if _dmDir == undefined or _dmDir == "" do _dmDir = (getDir #temp)
 _dmDir = substituteString _dmDir "\\" "/"
 if _dmDir[_dmDir.count] != "/" do _dmDir += "/"
+_dmDir = _dmDir + "3dsmax-mcp/"
+makeDir _dmDir all:true
 local _dmOut = _dmDir + "dialog_monitor_" + (timeStamp() as string) + ".png"
 '''
     code = f"""(
@@ -447,7 +495,7 @@ local _dmOut = _dmDir + "dialog_monitor_" + (timeStamp() as string) + ".png"
     crect = fetch_client_rect(hwnd_i, client=client)
     if crect:
         meta["client_rect"] = crect
-    return meta
+    return _promote_capture_file(client, meta)
 
 
 def box_center(box: list) -> tuple[float, float] | None:
@@ -624,8 +672,7 @@ def capture_max_menu_bar(
     else:
         code = f"MCP_DialogMonitor.captureMaxMenuBarMeta height:{int(height)}"
     data = _parse_meta(_exec_ms(client, code))
-    data["shared_workspace"] = False
-    return data
+    return _promote_capture_file(client, data)
 
 
 def capture_popup_menu(*, client: Any | None = None, outfile: str | None = None) -> dict[str, Any]:
@@ -637,14 +684,48 @@ def capture_popup_menu(*, client: Any | None = None, outfile: str | None = None)
     else:
         code = "MCP_DialogMonitor.capturePopupMenuMeta()"
     data = _parse_meta(_exec_ms(client, code))
-    data["shared_workspace"] = False
-    return data
+    return _promote_capture_file(client, data)
 
 
 def list_popup_menus(*, client: Any | None = None) -> dict[str, Any]:
     client = _ensure_max_client(client)
     ensure_dialog_monitor_loaded(client)
     return _parse_meta(_exec_ms(client, "MCP_DialogMonitor.listPopupMenus()"))
+
+
+def max_window_state(*, client: Any | None = None) -> dict[str, Any]:
+    """Read 3ds Max main-window placement (minimized / visible / show_cmd)."""
+    client = _ensure_max_client(client)
+    ensure_dialog_monitor_loaded(client)
+    return _parse_meta(_exec_ms(client, "MCP_DialogMonitor.maxWindowState()", timeout=15.0))
+
+
+def restore_max_window(
+    *,
+    restore_mode: str = "restore",
+    set_foreground: bool = True,
+    redraw: bool = True,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    """Restore / maximize / minimize the 3ds Max main window via ShowWindow.
+
+    restore_mode: restore | normal | maximize | minimize | show
+    Use before capture_viewport when Max is minimized (gw.getViewportDib → 16×16).
+    Locked / disconnected RDP sessions may report ok without a real restore.
+    """
+    mode = (restore_mode or "restore").strip().lower()
+    allowed = {"restore", "normal", "maximize", "max", "minimize", "min", "show"}
+    if mode not in allowed:
+        raise ValueError(f"restore_mode must be one of {sorted(allowed)}")
+    client = _ensure_max_client(client)
+    ensure_dialog_monitor_loaded(client)
+    fg = "true" if set_foreground else "false"
+    rd = "true" if redraw else "false"
+    code = (
+        f'MCP_DialogMonitor.restoreMaxWindow restoreMode:"{_escape_ms_string(mode)}" '
+        f"setForeground:{fg} redraw:{rd}"
+    )
+    return _parse_meta(_exec_ms(client, code, timeout=30.0))
 
 
 def click_ocr_in_capture(
@@ -750,21 +831,15 @@ def click_menu_path(
 
     popup = capture_popup_menu(client=client)
     if not popup.get("ok"):
-        # Fallback: capture a region under the menubar click
+        # Fallback: capture under menubar click into Max temp, then promote.
         sx, sy = step1["screen_xy"]
-        fallback_out = _shared_capture_outfile("menu_fallback")
-        if fallback_out:
-            out_expr = f'outfile:@"{_escape_ms_string(fallback_out)}"'
-        else:
-            out_expr = ""
         code = f"""(
-local cap = MCP_DialogMonitor.captureScreenRect {int(sx) - 40} {int(sy)} 420 480 {out_expr}
+local cap = MCP_DialogMonitor.captureScreenRect {int(sx) - 40} {int(sy)} 420 480
 if classOf cap == String then ("{{\\"ok\\":false,\\"error\\":\\"" + (MCP_DialogMonitor.escapeJson cap) + "\\"}}") else (
   MCP_DialogMonitor.metaJson 0 "MenuFallback" cap[1] MCP_DialogMonitor.lastScreenRect cap[2] cap[3] extra:"\\"source\\":\\"menu_fallback\\""
 )
 )"""
-        popup = _parse_meta(_exec_ms(client, code))
-        popup["shared_workspace"] = bool(fallback_out)
+        popup = _promote_capture_file(client, _parse_meta(_exec_ms(client, code)))
 
     step2 = click_ocr_in_capture(
         item,

@@ -1,21 +1,73 @@
 import json
 import math
 import os
-import tempfile
+from pathlib import Path
 from uuid import uuid4
 from typing import Any
 
-from ..server import mcp, client
+from ..server import mcp, client, COMMS_DIR as COMMS_PATH, WORKSPACE_DIR
 from ..coerce import StrList, FloatList, IntList
 from ..helpers.maxscript import safe_string
 from ..helpers.native_compat import is_missing_native_route_error
+from ..helpers.file_http import file_download_url as _file_download_url
 from ..max_client import MaxBridgeError
 
 
-COMMS_DIR = os.path.join(tempfile.gettempdir(), "3dsmax-mcp")
+COMMS_DIR = str(COMMS_PATH)
 DEFAULT_MAX_BYTES = 1_000_000
 DEFAULT_MAX_WIDTH = 1600
 DEFAULT_MIN_WIDTH = 640
+
+
+def _promote_max_output(file_path: str) -> str:
+    """Keep Max ``%TEMP%\\3dsmax-mcp`` original; copy to shared workspace if valid."""
+    from ..workspace_config import copy_to_shared_if_valid, next_shared_capture_path
+
+    if not file_path:
+        return file_path
+    copied = copy_to_shared_if_valid(file_path)
+    if copied is not None:
+        return str(copied).replace("\\", "/")
+    dest = next_shared_capture_path(Path(str(file_path).replace("\\", "/")).stem)
+    if not dest:
+        return file_path
+    src = str(file_path).replace("\\", "/")
+    dst = dest.replace("\\", "/")
+    parent = str(Path(dst).parent).replace("\\", "/")
+    raw = client.send_command(
+        f'(makeDir @"{parent}" all:true; if copyFile @"{src}" @"{dst}" then @"{dst}" else "ERROR")'
+    ).get("result", "")
+    text = str(raw).strip().strip('"')
+    if text and not text.startswith("ERROR"):
+        return text.replace("\\", "/")
+    return file_path
+
+
+def _max_comms_png(prefix: str = "viewport") -> str:
+    """Ask Max for a new PNG path under its ``%TEMP%\\3dsmax-mcp``."""
+    raw = client.send_command(
+        r'''(
+local dir = sysInfo.tempdir
+if dir == undefined or dir == "" do dir = (getDir #temp)
+dir = substituteString dir "\\" "/"
+if dir[dir.count] != "/" do dir += "/"
+dir = dir + "3dsmax-mcp/"
+makeDir dir all:true
+dir + "''' + prefix + r'''_" + (timeStamp() as string) + ".png"
+)'''
+    ).get("result", "")
+    path = str(raw).strip().strip('"').replace("\\", "/")
+    if not path or path.startswith("ERROR"):
+        return os.path.join(COMMS_DIR, f"{prefix}_{uuid4().hex}.png").replace("\\", "/")
+    return path
+
+
+def _attach_download_url(result: dict[str, Any], path: str) -> None:
+    url = _file_download_url(path, workspace_dir=WORKSPACE_DIR, comms_dir=COMMS_PATH)
+    if url:
+        result["download_url"] = url
+        result["name"] = os.path.basename(_normalize_path(path))
+
 
 _VIEW_TYPES = {
     "perspective": "view_persp_user", "orthographic": "view_iso_user",
@@ -343,6 +395,7 @@ def _image_file_result(
         result["width"] = int(width)
     if height is not None:
         result["height"] = int(height)
+    _attach_download_url(result, path)
     if inline:
         result["hint"] = _INLINE_DISABLED_HINT
     return result
@@ -442,6 +495,7 @@ def capture_viewport(
         data = json.loads(response.get("result", "{}"))
         file_path = data.get("file", "")
         if file_path:
+            file_path = _promote_max_output(file_path)
             result = _image_file_result(
                 file_path,
                 mime_type="image/png",
@@ -455,8 +509,9 @@ def capture_viewport(
 
     if source=="agent": raise RuntimeError("AGENT VIEWPORT returned no capture; active view was not used")
 
-    capture_path = os.path.join(COMMS_DIR, f"viewport_{uuid4().hex}.png").replace("\\", "/")
+    capture_path = _max_comms_png("viewport")
     _capture_viewport_to_file(capture_path)
+    capture_path = _promote_max_output(capture_path)
     return _image_file_result(
         capture_path,
         mime_type="image/png",
@@ -509,6 +564,7 @@ def capture_screen(
         if (target != "screen" or crop is not None) and data.get("capture_contract") != "desktop_crop_v1":
             raise RuntimeError("Cropped screen capture requires the updated native bridge; uncropped image was not returned")
         if file_path:
+            file_path = _promote_max_output(file_path)
             result = _image_file_result(
                 file_path,
                 mime_type="image/jpeg",
@@ -544,12 +600,15 @@ def capture_screen(
             img_data = _read_image_bytes(capture_path)
             attempts += 1
 
+    capture_path = _promote_max_output(capture_path)
+    img_data = _read_image_bytes(capture_path)
     result: dict[str, Any] = {
         "type": "image_file",
         "file": _normalize_path(capture_path),
         "mime_type": "image/jpeg",
         "size_bytes": len(img_data),
     }
+    _attach_download_url(result, capture_path)
     if return_image:
         result["hint"] = _INLINE_DISABLED_HINT
     return result
@@ -591,6 +650,7 @@ def capture_multi_view(
     file_path = data.get("file", "")
     if not file_path:
         raise RuntimeError("No image file returned from multi-view capture")
+    file_path = _promote_max_output(file_path)
     result = _image_file_result(
         file_path,
         mime_type="image/png",

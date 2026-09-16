@@ -2,15 +2,17 @@
 	MCP_DialogMonitor — 发现插件对话框、截图、屏幕点击
 
 	Usage (3ds Max Listener):
-		fileIn @"...\dialog_monitor\mcp_dialog_monitor.ms"
+		fileIn @"...\maxscript\mcp\mcp_dialog_monitor.ms"
 		MCP_DialogMonitor.findDialog()
 		MCP_DialogMonitor.captureDialogMeta()
 		MCP_DialogMonitor.clickAtScreen 100 200
+		MCP_DialogMonitor.restoreMaxWindow()
 */
 
 global MCP_DialogMonitor
 global MCP_Server_DialogMonitor
 global MCP_DialogMouseHelperLoaded
+global MCP_DialogWinHelperLoaded
 
 struct DialogMonitorStruct
 (
@@ -86,6 +88,179 @@ struct DialogMonitorStruct
 		)
 		if pos == undefined do return undefined
 		#(pos.x, pos.y, pos.w, pos.h)
+	),
+
+	-- windows.getWindowPlacement[1] show-cmd, or "" if unknown
+	fn windowShowCmd hwnd =
+	(
+		local h = this.asHwndInt hwnd
+		if h == 0 do return ""
+		try
+		(
+			local place = windows.getWindowPlacement h removeUIScaling:false
+			if place != undefined and place.count >= 1 do return (place[1] as string)
+		)
+		catch ()
+		try
+		(
+			local place = windows.getWindowPlacement h
+			if place != undefined and place.count >= 1 do return (place[1] as string)
+		)
+		catch ()
+		""
+	),
+
+	fn isWindowMinimized hwnd =
+	(
+		local cmd = this.windowShowCmd (hwnd)
+		(cmd == "#showMinimized" or cmd == "#minimize" or cmd == "#forceMinimize")
+	),
+
+	fn showCmdToInt restoreMode =
+	(
+		local m = toLower (restoreMode as string)
+		case m of
+		(
+			"restore": 9 -- SW_RESTORE
+			"normal": 1 -- SW_SHOWNORMAL
+			"maximize": 3 -- SW_MAXIMIZE
+			"max": 3
+			"minimize": 6 -- SW_MINIMIZE
+			"min": 6
+			"show": 5 -- SW_SHOW
+			default: -1
+		)
+	),
+
+	fn ensureWinHelper =
+	(
+		try
+		(
+			local existing = dotNetClass "McpWin32Window"
+			if existing != undefined do
+			(
+				MCP_DialogWinHelperLoaded = true
+				return true
+			)
+		)
+		catch ()
+		if MCP_DialogWinHelperLoaded == true do return true
+
+		local source = ""
+		source += "using System;\n"
+		source += "using System.Runtime.InteropServices;\n"
+		source += "public class McpWin32Window {\n"
+		source += "  [DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);\n"
+		source += "  [DllImport(\"user32.dll\")] public static extern bool IsIconic(IntPtr hWnd);\n"
+		source += "  [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd);\n"
+		source += "  [DllImport(\"user32.dll\")] public static extern bool BringWindowToTop(IntPtr hWnd);\n"
+		source += "  public static bool Apply(int hwnd, int cmd, bool foreground) {\n"
+		source += "    IntPtr h = new IntPtr(hwnd);\n"
+		source += "    bool shown = ShowWindow(h, cmd);\n"
+		source += "    if (foreground) { BringWindowToTop(h); SetForegroundWindow(h); }\n"
+		source += "    return shown;\n"
+		source += "  }\n"
+		source += "  public static bool Iconic(int hwnd) { return IsIconic(new IntPtr(hwnd)); }\n"
+		source += "}\n"
+
+		try
+		(
+			local provider = dotNetObject "Microsoft.CSharp.CSharpCodeProvider"
+			local parms = dotNetObject "System.CodeDom.Compiler.CompilerParameters"
+			parms.GenerateInMemory = true
+			parms.ReferencedAssemblies.Add "System.dll"
+			local results = provider.CompileAssemblyFromSource parms #(source)
+			if results.Errors.HasErrors then
+			(
+				local msg = ""
+				local errCount = results.Errors.Count
+				for i = 0 to (errCount - 1) do
+				(
+					local err = results.Errors.Item[i]
+					msg += (err.ErrorText as string) + "; "
+				)
+				format "MCP_DialogMonitor: win helper compile failed: %\n" msg
+				return false
+			)
+			MCP_DialogWinHelperLoaded = true
+			true
+		)
+		catch
+		(
+			format "MCP_DialogMonitor: win helper load failed: %\n" (getCurrentException())
+			false
+		)
+	),
+
+	-- restoreMode: restore | normal | maximize | minimize | show
+	fn showWindowEx hwnd restoreMode:"restore" setForeground:true =
+	(
+		local h = this.asHwndInt hwnd
+		if h == 0 do return "{\"ok\":false,\"error\":\"invalid hwnd\"}"
+		local cmdInt = this.showCmdToInt (restoreMode)
+		if cmdInt < 0 do return "{\"ok\":false,\"error\":\"unknown restoreMode\"}"
+		if not (this.ensureWinHelper()) do
+			return "{\"ok\":false,\"error\":\"win helper unavailable\"}"
+
+		local wasMin = this.isWindowMinimized (h)
+		try
+		(
+			local cls = dotNetClass "McpWin32Window"
+			local shown = cls.Apply h cmdInt setForeground
+			local iconic = false
+			try (iconic = cls.Iconic h) catch (iconic = this.isWindowMinimized (h))
+			"{" + \
+				"\"ok\":" + (if shown then "true" else "false") + "," + \
+				"\"hwnd\":" + (h as string) + "," + \
+				"\"show_cmd\":\"" + (this.escapeJson (restoreMode as string)) + "\"," + \
+				"\"was_minimized\":" + (if wasMin then "true" else "false") + "," + \
+				"\"iconic\":" + (if iconic then "true" else "false") + "," + \
+				"\"foreground\":" + (if setForeground then "true" else "false") + \
+			"}"
+		)
+		catch
+		(
+			("{\"ok\":false,\"error\":\"" + (this.escapeJson (getCurrentException() as string)) + "\"}")
+		)
+	),
+
+	-- Restore 3ds Max main window from the taskbar. Default SW_RESTORE.
+	fn restoreMaxWindow restoreMode:"restore" setForeground:true redraw:true =
+	(
+		local hwnd = this.asHwndInt (windows.getMAXHWND())
+		if hwnd == 0 do return "{\"ok\":false,\"error\":\"no Max HWND\"}"
+		local result = this.showWindowEx (hwnd) restoreMode:restoreMode setForeground:setForeground
+		if redraw do
+		(
+			try (completeredraw()) catch ()
+		)
+		result
+	),
+
+	fn maxWindowState =
+	(
+		local hwnd = this.asHwndInt (windows.getMAXHWND())
+		if hwnd == 0 do return "{\"ok\":false,\"error\":\"no Max HWND\"}"
+		local cmd = this.windowShowCmd (hwnd)
+		local iconic = this.isWindowMinimized (hwnd)
+		if (this.ensureWinHelper()) do
+		(
+			try
+			(
+				local cls = dotNetClass "McpWin32Window"
+				iconic = cls.Iconic hwnd
+			)
+			catch ()
+		)
+		local vis = true
+		try (vis = windows.isWindowVisible hwnd) catch ()
+		"{" + \
+			"\"ok\":true," + \
+			"\"hwnd\":" + (hwnd as string) + "," + \
+			"\"show_cmd\":\"" + (this.escapeJson cmd) + "\"," + \
+			"\"iconic\":" + (if iconic then "true" else "false") + "," + \
+			"\"visible\":" + (if vis then "true" else "false") + \
+		"}"
 	),
 
 	fn findWindows titlePat: vendorPat: requireVendor: visibleOnly:true parentType:"desktop" =
@@ -179,13 +354,22 @@ struct DialogMonitorStruct
 		if lines.count == 0 then "(no matches)" else (lines as string)
 	),
 
-	fn defaultCapturePath =
+	fn commsDir =
 	(
-		local dir = (getDir #temp)
-		if dir == undefined or dir == "" do dir = sysInfo.tempdir
+		-- Prefer Windows %TEMP%\\3dsmax-mcp (ASCII, local). CJK shared workspace
+		-- is copied later; save bmp to those paths often fails.
+		local dir = sysInfo.tempdir
+		if dir == undefined or dir == "" do dir = (getDir #temp)
 		dir = substituteString dir "\\" "/"
 		if dir[dir.count] != "/" do dir += "/"
-		dir + "dialog_monitor_" + (timeStamp() as string) + ".png"
+		dir = dir + "3dsmax-mcp/"
+		makeDir dir all:true
+		dir
+	),
+
+	fn defaultCapturePath =
+	(
+		this.commsDir() + "dialog_monitor_" + (timeStamp() as string) + ".png"
 	),
 
 	-- Returns #(path, imageW, imageH) or "ERROR: ..."
@@ -298,18 +482,7 @@ struct DialogMonitorStruct
 		if geom == undefined do
 			return "{\"ok\":false,\"error\":\"could not read window geometry\"}"
 
-		local iconic = false
-		try
-		(
-			local place = windows.getWindowPlacement hwnd removeUIScaling:false
-			if place != undefined and place.count >= 1 do
-			(
-				local cmd = place[1] as string
-				if cmd == "#showMinimized" or cmd == "#minimize" or cmd == "#forceMinimize" do iconic = true
-			)
-		)
-		catch ()
-		if iconic do return "{\"ok\":false,\"error\":\"window is minimized\"}"
+		if (this.isWindowMinimized (hwnd)) do return "{\"ok\":false,\"error\":\"window is minimized\"}"
 
 		local cap = this.captureHwndEx hwnd outfile:outfile displayResult:displayResult
 		if classOf cap == String do
@@ -605,3 +778,5 @@ format "  MCP_DialogMonitor.captureMaxMenuBarMeta()\n"
 format "  MCP_DialogMonitor.capturePopupMenuMeta()\n"
 format "  MCP_DialogMonitor.clickAtScreen x y\n"
 format "  MCP_DialogMonitor.clickAtLocal hwnd lx ly\n"
+format "  MCP_DialogMonitor.maxWindowState()\n"
+format "  MCP_DialogMonitor.restoreMaxWindow()\n"

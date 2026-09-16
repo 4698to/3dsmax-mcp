@@ -18,7 +18,7 @@
 - **多人共享与多实例** — 一台共享服务器对接多台 3ds Max；公共 Agent 通过有界 FIFO 短租约队列获取实例，空闲 TTL / 断线自动释放（队列满硬背压）
 - **深度插件支持** — tyFlow、Data Channel、MCG、OSL、Forest Pack、RailClone、Octane
 - **对话框 OCR 点击** — 对无 HWND 的 Qt 插件窗（如自动蒙皮 GoSkin）截图 → 外部 OCR → 按文字模拟鼠标点击
-- **内置智能体技能包** — 附带 MAXScript 参考文档，便于你编写自己的工具
+- **内置智能体技能包** — **远程** `3dsmax-mcp-remote`（默认，给 A：文档 + HTTP 辅助脚本）；**本地** `3dsmax-mcp-dev`（维护者文档）。运行 `build_skill_package.bat`（或 `remote` / `local` / `both`）。给 A 拷 `dist/3dsmax-mcp-remote/`。见 [docs/ADVANCED.md](docs/ADVANCED.md#agent-skill)
 
 ## 环境要求
 
@@ -349,6 +349,10 @@ Base URL、API Key 和模型名：
 
 `capture_viewport` 先出快速预览（智能体能"看到"结果并据此调整），确认后 `render_scene` 正式渲染。
 
+Max 窗口必须**可见且未最小化**。旧版（如 2015）TCP Bridge 走 `gw.getViewportDib()`，Nitrous 在最小化时不绘制视口，调用仍会成功，但只返回 **16×16** 灰底十字占位图。窗口还原/最大化后即可抓到正常分辨率（实测约 1556×926）。可先 `restore_max_window`。需要画面而窗口无法还原时，改用 `render_scene`（离屏渲染，不依赖视口 DIB）。
+
+`capture_viewport` 返回本地 `file` 路径；在 **streamable-http** 下还会附带 `download_url`（`GET /files/{name}`）。截图落在 `%TEMP%/3dsmax-mcp/`，该目录已纳入 HTTP 可下载范围，**不依赖**共享 `[workspace]` 配置。
+
 > **渲染器说明**：国内建筑可视化多用 V-Ray / Corona。当前对 Octane 的材质连线支持最完整，
 > V-Ray / Corona 的深度支持正在推进中——如果你在用，欢迎提 issue 告诉我们你的具体需求。
 
@@ -429,6 +433,7 @@ Base URL、API Key 和模型名：
 | `goskin_confirm_start` | 仅当 `user_confirmed=true` 时点击「开始蒙皮」 |
 | `goskin_run_auto` | ensure + run；默认同样在开始前暂停 |
 | `check_dialog_ocr_health` / `recognize_plugin_dialog` / `click_plugin_dialog_button` | 通用对话框 OCR 与点击 |
+| `get_max_window_state` / `restore_max_window` | 读/还原 Max 主窗口（最小化时视口抓图会变成 16×16） |
 
 OCR 服务基址配置（优先级从高到低）：
 
@@ -470,6 +475,9 @@ core/full 仍可用于需要一次性公开全部参数的旧客户端。
 - **2023–2027**：原生桥接（推荐）+ 可选 TCP。原生插件按版本单独编译，安装脚本会自动匹配已安装的版本。
 - **更低版本（如 2015）**：无原生桥接，使用 **TCP** 传输（运行 `mcp_server.ms` / **MCP Start**）。详见上文「3ds Max 版本与传输方式」。
 
+**`capture_viewport` 只出了 16×16 小图**
+3ds Max 主窗口处于**最小化**（或隐藏 / 离屏 / 尚未重绘）时，`gw.getViewportDib()` 读不到 Nitrous framebuffer，仍会返回成功，但图像是 16×16 占位缩略图。先用 `get_max_window_state` 确认 `iconic`，再调用 `restore_max_window`（可选 `restore_mode="maximize"`）把窗口拉回前台，等待重绘后重抓。2015 TCP Bridge 已对照验证：最小化 → 16×16 / 434 字节；还原后 → 1556×926 / ~52 KB。原生 AGENT VIEWPORT 在最小化时会直接拒绝抓图（`capture_ready=false`）。窗口无法还原时用 `render_scene`。锁屏 / 断开 RDP 时还原可能空成功。
+
 **安全模式**
 安全模式默认开启，`execute_maxscript` 等通道受其限制，用于阻止代理执行危险命令。以下命令会被拦截：
 
@@ -488,6 +496,11 @@ core/full 仍可用于需要一次性公开全部参数的旧客户端。
 如需禁用，在配置文件 `%LOCALAPPDATA%\3dsmax-mcp\mcp_config.ini` 中设置 `safe_mode=false`。
 详见 [docs/ADVANCED.md](docs/ADVANCED.md)。
 
+**重要操作审计日志**
+破坏性 / 确认门 / 实例租约 / 加载渲染等工具调用会写入 `%TEMP%/3dsmax-mcp/audit/YYYYMMDD.jsonl`。
+`tools/call` 的 `arguments` 可附带可选 `user_id`（不在各工具 schema 中），日志还会记录 `date` 与当前 `scene_path`。
+详见 [docs/AUDIT.md](docs/AUDIT.md)；`get_file_service_info` 返回 `audit` 路径说明。用 `MAXMCP_AUDIT=0` 关闭。
+
 **能自己加工具吗**
 可以。安装脚本会生成一个智能体技能包，内含 MAXScript 参考资料，专门用来指导 AI 写新工具。
 
@@ -503,6 +516,7 @@ core/full 仍可用于需要一次性公开全部参数的旧客户端。
 - 问题反馈：https://github.com/cl0nazepamm/3dsmax-mcp/issues
 - 更新日志：[docs/CHANGELOG.md](docs/CHANGELOG.md)
 - 进阶配置：[docs/ADVANCED.md](docs/ADVANCED.md)
+- 重要操作审计：[docs/AUDIT.md](docs/AUDIT.md)
 
 如果这个工具对你有用，欢迎在 GitHub 点个 Star，也欢迎录制视频、写文章分享——
 让更多中文用户看到。
