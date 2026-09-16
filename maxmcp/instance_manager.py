@@ -45,7 +45,7 @@ Lease / queue env knobs:
 - ``MAXMCP_LOCK_TTL`` — idle lease seconds (default 180)
 - ``MAXMCP_ACQUIRE_WAIT_SECONDS`` — max seconds to wait in FIFO queue (default 60)
 - ``MAXMCP_ACQUIRE_QUEUE_MAX`` — max waiters before QUEUE_FULL (default 32)
-- ``MAXMCP_RESET_ON_ACQUIRE`` — reset Max scene on new lease (default true)
+- ``MAXMCP_RESET_ON_ACQUIRE`` — opt-in: reset Max scene on new lease (default false)
 """
 
 from __future__ import annotations
@@ -249,10 +249,11 @@ def _env_acquire_queue_max() -> int:
 
 
 def _env_reset_on_acquire() -> bool:
+    """Opt-in only: unset / empty means do not reset on acquire."""
     raw = os.environ.get(ENV_RESET_ON_ACQUIRE)
-    if raw is None:
-        return True
-    return raw.strip().lower() not in ("0", "false", "no", "off")
+    if raw is None or not str(raw).strip():
+        return False
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 def _retry_after_seconds(queue_depth: int, lock_ttl: float) -> float:
@@ -966,8 +967,17 @@ class InstanceManager:
         )
         return self._clients[inst.name]
 
-    def _reset_scene(self, client: MaxClient) -> None:
-        """Clear the Max scene for multi-tenant isolation."""
+    def _reset_scene(self, client: MaxClient) -> str:
+        """Save current scene, then clear it (user-opt-in isolation).
+
+        Always saves via ``MCP_SceneManage.saveScene`` first (handles unsaved
+        scenes under ``%TEMP%\\3dsmax-mcp``), then resets.
+        Returns the save result path / message.
+        """
+        save_raw = client.send_command("MCP_SceneManage.saveScene()")
+        save_text = str(save_raw.get("result", "")).strip().strip('"')
+        if save_text.startswith("ERROR"):
+            raise InstanceError(f"Save before reset failed: {save_text}")
         if getattr(client, "native_available", False):
             client.send_command(
                 json.dumps({"action": "reset"}),
@@ -975,6 +985,7 @@ class InstanceManager:
             )
         else:
             client.send_command("MCP_SceneManage.resetScene()")
+        return save_text
 
     def _busy_summary_locked(self) -> str:
         return ", ".join(
@@ -1096,9 +1107,10 @@ class InstanceManager:
         client, needs_reset = self._try_grant_now(session, name, reset_scene=do_reset)
         if client is not None:
             scene_reset = False
+            saved_before_reset = None
             if needs_reset:
                 try:
-                    self._reset_scene(client)
+                    saved_before_reset = self._reset_scene(client)
                     scene_reset = True
                 except Exception:
                     logging.exception(
@@ -1118,6 +1130,7 @@ class InstanceManager:
                 "queue_position": None,
                 "lease_idle_seconds": self._lock_ttl,
                 "scene_reset": scene_reset,
+                "saved_before_reset": saved_before_reset,
             }
 
         # Named offline / unknown already raised inside _pick when no busy case;
@@ -1201,9 +1214,10 @@ class InstanceManager:
                 )
 
         scene_reset = False
+        saved_before_reset = None
         if needs_reset:
             try:
-                self._reset_scene(client)
+                saved_before_reset = self._reset_scene(client)
                 scene_reset = True
             except Exception:
                 logging.exception(
@@ -1224,6 +1238,7 @@ class InstanceManager:
             "queue_position": queue_position,
             "lease_idle_seconds": self._lock_ttl,
             "scene_reset": scene_reset,
+            "saved_before_reset": saved_before_reset,
         }
 
     def _release_locked(self, session: object, name: str) -> None:

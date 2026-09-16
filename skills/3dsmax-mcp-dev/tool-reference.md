@@ -105,7 +105,8 @@ and `capture_tyflow_editor` for foreign flows.
 For Data Channel or Max Creation Graph work, read [procedural-graphs.md](procedural-graphs.md) completely before acting. It contains the dedicated tool workflows, agentic compile/verify loop, safety gates, validation rules, and runtime pitfalls.
 
 ### Scene management
-- `manage_scene` (hold/fetch/reset/save/info/save_older) — TCP; `save` and `save_older` both call `MCP_SceneManage.saveScene`
+- `manage_scene` (hold/fetch/reset/save/info/save_as/save_scene_as) — `save_as` needs `file_path`; **basename only** → `{WORKSPACE_DIR}/<name>.max`
+- `save_scene_as` / `save_as` — same Save As (directories in `file_path` ignored)
 - `load_scene` — `MCP_SceneManage.loadScene`
 - `get_unhidden_meshes_bones` — unhidden Editable_Poly/Mesh + Bone/Biped names and AnimHandles
 - `select_by_handles` — select by AnimHandle array (`MCP_SceneManage.selectByHandles`)

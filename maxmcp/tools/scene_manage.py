@@ -1,8 +1,9 @@
 import json as _json
+from pathlib import Path
 from typing import Any, Optional
 
 from ..coerce import IntList
-from ..server import mcp, client
+from ..server import WORKSPACE_DIR, mcp, client
 
 
 _NATIVE_SCENE_ACTIONS = frozenset({"hold", "fetch", "reset", "save", "info"})
@@ -12,8 +13,10 @@ _MS_SCENE_ACTIONS = {
     "reset": "MCP_SceneManage.resetScene()",
     "save": "MCP_SceneManage.saveScene()",
     "info": "MCP_SceneManage.getInfo()",
-    "save_older": "MCP_SceneManage.saveScene()",
 }
+# Path-required actions handled by manage_scene(..., file_path=) → saveSceneAs
+_SAVE_AS_ACTIONS = frozenset({"save_as", "save_scene_as"})
+_ALL_MANAGE_ACTIONS = frozenset(_MS_SCENE_ACTIONS) | _SAVE_AS_ACTIONS
 
 
 def _unwrap_maxscript_text(raw: Any) -> str:
@@ -52,34 +55,147 @@ def _parse_scene_manage_json(raw: Any) -> dict[str, Any]:
     return data
 
 
+def _resolve_save_as_path(file_path: str) -> str:
+    """Keep only the basename; always save under WORKSPACE_DIR.
+
+    Agents often invent absolute / ``/workspace/...`` / nonsense directories. Those
+    directories are ignored — only the file name is used so Max writes into the
+    shared (or fallback) workspace root.
+    """
+    raw = (file_path or "").strip()
+    if not raw:
+        raise ValueError("file_path is empty")
+
+    # Strip quotes agents sometimes wrap around paths.
+    if (raw.startswith('"') and raw.endswith('"')) or (
+        raw.startswith("'") and raw.endswith("'")
+    ):
+        raw = raw[1:-1].strip()
+    if not raw:
+        raise ValueError("file_path is empty")
+
+    name = Path(raw.replace("\\", "/")).name
+    name = name.strip().lstrip(".")
+    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+        raise ValueError(f"file_path has no usable file name: {file_path!r}")
+
+    # Block path tricks that survive basename on odd inputs.
+    if ".." in name:
+        raise ValueError(f"invalid file name: {name!r}")
+
+    dest = Path(str(WORKSPACE_DIR)) / name
+    if not dest.name.lower().endswith(".max"):
+        dest = Path(str(dest) + ".max")
+
+    return str(dest).replace("\\", "/")
+
+
+def _save_scene_as_impl(file_path: str) -> str:
+    from ..helpers.audit_log import clear_scene_path_cache, note_scene_path
+    from ..helpers.maxscript import safe_value
+
+    try:
+        resolved = _resolve_save_as_path(file_path)
+    except ValueError as exc:
+        return f"ERROR: {exc}"
+
+    fp = safe_value(resolved)
+    if not fp.startswith("@"):
+        fp = '@"' + fp.replace('"', '""') + '"'
+    result = _call_scene_manage(f"MCP_SceneManage.saveSceneAs {fp}")
+    text = _unwrap_maxscript_text(result)
+    if not str(text).startswith("ERROR"):
+        note_scene_path(resolved)
+        clear_scene_path_cache()
+    return text if text else result
+
+
 @mcp.tool()
-def manage_scene(action: str) -> str:
+def manage_scene(
+    action: str,
+    file_path: str = "",
+    path: str = "",
+) -> str:
     """Manage the 3ds Max scene state via MCP_SceneManage (or native hold/fetch/reset/save/info).
 
-    Actions: hold, fetch, reset, save, info, save_older.
-    ``save`` / ``save_older`` both call ``MCP_SceneManage.saveScene`` (3 versions
-    older; unsaved scenes get a random name under ``%TEMP%\\3dsmax-mcp``).
+    Actions: hold, fetch, reset, save, info, save_as, save_scene_as.
+    ``save`` with no path re-saves the current scene file (or Temp if unsaved).
+    ``save`` / ``save_as`` / ``save_scene_as`` with ``file_path`` or ``path`` keep
+    only the **basename** and write under the shared workspace root (agent
+    directories are ignored). Prefer ``file_path``; ``path`` is accepted as an alias
+    because agents often pass that name.
+    ``reset`` always saves first, then clears the scene (user-initiated only).
     """
     from ..helpers.audit_log import clear_scene_path_cache, note_scene_path
 
     action = action.lower().strip()
-    if action not in _MS_SCENE_ACTIONS:
-        return "Unknown action: {0}. Use hold, fetch, reset, save, info, or save_older.".format(
-            action
+    # Tolerate accidental "save_as:/path" by splitting once.
+    embedded_path = ""
+    if action.startswith("save_as:") or action.startswith("save_scene_as:"):
+        action, _, embedded_path = action.partition(":")
+        action = action.strip()
+        embedded_path = embedded_path.strip()
+
+    # Agents often pass path= instead of file_path=
+    requested = (file_path or path or embedded_path or "").strip()
+
+    if action not in _ALL_MANAGE_ACTIONS:
+        return (
+            "Unknown action: {0}. Use hold, fetch, reset, save, info, save_as, or save_scene_as.".format(
+                action
+            )
         )
 
+    # save + a name → Save As (basename → WORKSPACE_DIR), not the broken relative cwd
+    if action in _SAVE_AS_ACTIONS or (action == "save" and requested):
+        if not requested:
+            return (
+                'ERROR: save_as requires file_path or path '
+                '(e.g. manage_scene(action="save_as", file_path="box_origin.max"))'
+            )
+        return _save_scene_as_impl(requested)
+
     if client.native_available and action in _NATIVE_SCENE_ACTIONS:
+        if action == "reset":
+            # User-initiated reset: save first (handles unsaved → Temp\3dsmax-mcp).
+            save_raw = _call_scene_manage("MCP_SceneManage.saveScene()")
+            save_text = _unwrap_maxscript_text(save_raw)
+            if str(save_text).startswith("ERROR"):
+                return f"ERROR: save before reset failed: {save_text}"
         payload = _json.dumps({"action": action})
         response = client.send_command(payload, cmd_type="native:manage_scene")
         result = response.get("result", "")
     else:
+        if action == "reset":
+            save_raw = _call_scene_manage("MCP_SceneManage.saveScene()")
+            save_text = _unwrap_maxscript_text(save_raw)
+            if str(save_text).startswith("ERROR"):
+                return f"ERROR: save before reset failed: {save_text}"
         result = _call_scene_manage(_MS_SCENE_ACTIONS[action])
 
     if action == "reset":
         note_scene_path(None)
-    elif action in {"save", "save_older", "fetch"}:
+    elif action in {"save", "fetch"}:
         clear_scene_path_cache()
     return result
+
+
+@mcp.tool()
+def save_scene_as(file_path: str) -> str:
+    """Save the current scene under the shared workspace using only the file name.
+
+    Any directory in ``file_path`` is ignored (agents often invent paths). Example:
+    ``/workspace/output/foo.max`` and ``D:/tmp/foo.max`` both become
+    ``{WORKSPACE_DIR}/foo.max``. Missing ``.max`` is appended. Equivalent to
+    ``manage_scene(action="save_as", file_path=...)``.
+    """
+    return _save_scene_as_impl(file_path)
+
+
+@mcp.tool()
+def save_as(file_path: str) -> str:
+    """Alias of ``save_scene_as`` — basename only, under the shared workspace."""
+    return _save_scene_as_impl(file_path)
 
 
 @mcp.tool()

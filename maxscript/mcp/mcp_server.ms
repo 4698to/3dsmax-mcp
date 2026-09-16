@@ -953,17 +953,24 @@ struct MCPUIStruct
 		--format "MCP Server: onStartClick\n"
 		try (MCP_Server.bindIP = this.ipTextBox.Text) catch ()
 		try (MCP_Server.port = (this.portTextBox.Text as integer)) catch (MCP_Server.port = 8765)
-		MCP_Server.safeMode = this.safeCheckBox.Checked
+		try
+		(
+			if this.safeCheckBox != undefined do
+				MCP_Server.safeMode = this.safeCheckBox.Checked
+		)
+		catch ()
 		-- 远程模式必须监听 TCP (Native named pipe 无法跨机)
-		if this.modeCombo.SelectedIndex == 1 then
+		if this.modeCombo != undefined and this.modeCombo.SelectedIndex == 1 then
 			MCP_Server.transport = #tcp
-		else
+		else if this.transportCombo != undefined then
 			MCP_Server.transport = case this.transportCombo.SelectedIndex of
 			(
 				1: #tcp
 				2: #native
 				default: #auto
 			)
+		else
+			MCP_Server.transport = #auto
 		local result = #failed
 		try
 		(
@@ -998,7 +1005,15 @@ struct MCPUIStruct
 	(
 		-- 窗口关掉时务必恢复 Max 加速键, 避免 LostFocus 未触发导致快捷键失效
 		enableAccelerators = true
-		if this.closeStopCheckBox.Checked then
+		-- createUI 中途失败会 clearControls, 但 FormClosing 仍可能触发
+		local stopOnClose = true
+		try
+		(
+			if this.closeStopCheckBox != undefined do
+				stopOnClose = this.closeStopCheckBox.Checked
+		)
+		catch (stopOnClose = true)
+		if stopOnClose then
 		(
 			if MCP_Server != undefined and MCP_Server.isRunning do MCP_Server.stop()
 			args.Cancel = false
@@ -1008,7 +1023,7 @@ struct MCPUIStruct
 		else
 		(
 			args.Cancel = true
-			this.form.Hide()
+			try (if this.form != undefined do this.form.Hide()) catch ()
 		)
 	),
 
@@ -1208,7 +1223,8 @@ struct MCPUIStruct
 		catch
 		(
 			format "MCP UI: 创建界面失败: %\n" (getCurrentException())
-			-- 重置全部控件, 下次 show() 会重新创建, 避免半初始化残留导致二次报错
+			-- 半初始化窗体仍可能触发 FormClosing: 先 Dispose 再清空引用 (勿 Close, 避免重入)
+			try (if this.form != undefined do this.form.Dispose()) catch ()
 			this.clearControls()
 		)
 	),

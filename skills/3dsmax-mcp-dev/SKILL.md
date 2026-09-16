@@ -36,8 +36,9 @@ Principles:
 - Match the user's request. Do not run setup, discovery, or scene analysis by habit.
 - Do not call `get_bridge_status` or `get_session_context` as a session preamble.
 - Prefer a dedicated MCP tool over raw MAXScript when a tool clearly matches the task.
+- Scene load/save/reset: use `load_scene`, `manage_scene`, `save_as` / `save_scene_as` — not ad-hoc Max file scripts.
 - Do not render unless the user explicitly asks. Viewport capture is fine when visual proof is useful.
-- Multiple Max instances: `list_max_instances`, `select_max_instance(pid)`, `get_selected_max_instance`, and `release_max_instance` are available in every profile. The first successful native connection stays bound to that Max. Starting or claiming another Max only changes the default for unbound clients. If the selected Max closes, explicitly select another or release it; clients never silently switch. `MCP_MAX_PID` or `MCP_MAX_PIPE` pins the startup target (`MCP_MAX_PIPE` takes precedence). Release also clears startup pinning.
+- Multiple Max instances: `list_max_instances`, `select_max_instance(pid|name)`, `get_selected_max_instance`, and `release_max_instance` are available in every profile. Prefer `name` from `list_instances` (e.g. `max-8765`) for remote/ini targets — it acquires a session lease without resetting the scene. `pid` binds local native pipes. The first successful native connection stays bound to that Max. Starting or claiming another Max only changes the default for unbound clients. If the selected Max closes, explicitly select another or release it; clients never silently switch. `MCP_MAX_PID` or `MCP_MAX_PIPE` pins the startup target (`MCP_MAX_PIPE` takes precedence). Release also clears startup pinning.
 
 ## Read on demand (modules)
 
@@ -46,6 +47,7 @@ Open only the file needed for the current task (one level from this index):
 | When | Read |
 |------|------|
 | Multi-agent leases / acquire / release | [instance-locks.md](instance-locks.md) |
+| Load / save / reset scene (`manage_scene`, `save_as`, `load_scene`) | [tool-reference.md](tool-reference.md) (§ Scene management) |
 | Which tool family to use | [tool-choice.md](tool-choice.md) |
 | Full tool catalog (objects, mesh, materials, GoSkin, tyFlow, …) | [tool-reference.md](tool-reference.md) |
 | `execute_maxscript` + MCP gotchas | [mcp-pitfalls.md](mcp-pitfalls.md) |

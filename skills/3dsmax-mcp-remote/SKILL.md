@@ -30,9 +30,29 @@ description: >-
 | List online Max instances | `list_instances` | `python list_online_instances.py` |
 | Viewport screenshot | `capture_viewport` (+ download) | `python capture_viewport_shot.py --out shot.png` |
 | Upload file to workspace | `workspace_upload` / HTTP `/files/upload` | `python upload_to_mcp.py <path>` |
+| Load / save scene | `load_scene`, `manage_scene`, `save_as` | — (MCP tools only) |
 | GoSkin prepare (no 开始蒙皮) | `goskin_*` | `python goskin_dev_flow.py --instance <name>` |
 
 Details: [scripts/README.md](scripts/README.md). Scripts are stdlib HTTP only (no `maxmcp`). If unsure of the URL, use MCP tools directly and skip the scripts.
+
+## Scene file ops (MCP tools — do not invent Max-side scripts)
+
+Drive save/load/reset **only** through these tools on B (never raw `saveMaxFile` / Max script paths on A):
+
+| Need | Tool call |
+|------|-----------|
+| Scene summary (path, counts) | `manage_scene(action="info")` |
+| Save current file (or Temp if unsaved) | `manage_scene(action="save")` |
+| Save As to a path | `manage_scene(action="save_as", file_path=...)` **or** `save_as` / `save_scene_as` |
+| Load a `.max` | `load_scene(file_path=...)` |
+| Hold / fetch / reset | `manage_scene(action="hold"|"fetch"|"reset")` — reset is user-opt-in; saves first |
+
+Path tips:
+- For Save As, only the **file name** is used; directories agents invent are ignored.
+  Example: `/workspace/output/foo.max` → `{WORKSPACE_DIR}/foo.max`.
+- Pass `file_path` **or** `path` (alias). `manage_scene(action="save", path="foo.max")` is treated as Save As.
+- Do **not** use `action="save_as:/path"` — pass `file_path`/`path` as a separate argument.
+- Full catalog: [tool-reference.md](tool-reference.md) § Scene management. Leases: [instance-locks.md](instance-locks.md).
 
 ## Tool Profile Routing
 
@@ -45,7 +65,7 @@ Principles:
 - Do not call `get_bridge_status` or `get_session_context` as a session preamble.
 - Prefer a dedicated MCP tool over raw MAXScript when a tool clearly matches the task.
 - Do not render unless the user explicitly asks. Viewport capture is fine when visual proof is useful.
-- Multiple Max instances: `list_max_instances`, `select_max_instance(pid)`, `get_selected_max_instance`, and `release_max_instance` are available in every profile. The first successful native connection stays bound to that Max. Starting or claiming another Max only changes the default for unbound clients. If the selected Max closes, explicitly select another or release it; clients never silently switch. `MCP_MAX_PID` or `MCP_MAX_PIPE` pins the startup target (`MCP_MAX_PIPE` takes precedence). Release also clears startup pinning.
+- Multiple Max instances: `list_max_instances`, `select_max_instance(pid|name)`, `get_selected_max_instance`, and `release_max_instance` are available in every profile. Prefer `name` from `list_instances` (e.g. `max-8765`) for remote/ini targets — it acquires a session lease without resetting the scene. `pid` binds local native pipes. The first successful native connection stays bound to that Max. Starting or claiming another Max only changes the default for unbound clients. If the selected Max closes, explicitly select another or release it; clients never silently switch. `MCP_MAX_PID` or `MCP_MAX_PIPE` pins the startup target (`MCP_MAX_PIPE` takes precedence). Release also clears startup pinning.
 
 ## Read on demand (modules)
 
@@ -54,6 +74,7 @@ Open only the file needed for the current task (one level from this index):
 | When | Read |
 |------|------|
 | Multi-agent leases / acquire / release | [instance-locks.md](instance-locks.md) |
+| Load / save / reset scene (`manage_scene`, `save_as`, `load_scene`) | [tool-reference.md](tool-reference.md) (§ Scene management) |
 | Which tool family to use | [tool-choice.md](tool-choice.md) |
 | Full tool catalog (objects, mesh, materials, GoSkin, tyFlow, …) | [tool-reference.md](tool-reference.md) |
 | `execute_maxscript` + MCP gotchas | [mcp-pitfalls.md](mcp-pitfalls.md) |

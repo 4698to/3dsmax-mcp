@@ -8,7 +8,8 @@ Public multi-agent mode uses a bounded FIFO wait queue and a short idle lease:
 ``acquire_instance`` waits up to ``MAXMCP_ACQUIRE_WAIT_SECONDS`` for capacity,
 rejects with ``QUEUE_FULL`` when the wait list is saturated, and auto-releases
 after ``MAXMCP_LOCK_TTL`` seconds without tool activity (activity renews the
-lease). New leases reset the scene by default (``MAXMCP_RESET_ON_ACQUIRE``).
+lease). Scene reset on acquire is **opt-in** (``reset_scene=true`` or
+``MAXMCP_RESET_ON_ACQUIRE=true``); when requested, the scene is saved first.
 """
 
 from __future__ import annotations
@@ -75,14 +76,17 @@ def acquire_instance(
     If no instance is idle, waits up to the configured acquire timeout on a
     bounded FIFO queue (does not busy-poll). On success the lease is exclusive
     until ``release_instance``, idle TTL expiry, or session disconnect. Activity
-    on scene tools renews the idle timer. By default a fresh lease resets the
-    Max scene so tenants do not see each other's work.
+    on scene tools renews the idle timer.
+
+    Scene reset is **opt-in** only (default off). Pass ``reset_scene=true`` or
+    set ``MAXMCP_RESET_ON_ACQUIRE=true`` to clear the scene after acquire; the
+    current file is saved first (unnamed scenes go under ``%TEMP%\\3dsmax-mcp``).
 
     Args:
         name: Optional instance name from list_instances. When omitted, the
             first idle online instance is chosen.
-        reset_scene: Override scene reset for this acquire. None uses the
-            server default (MAXMCP_RESET_ON_ACQUIRE, default true).
+        reset_scene: When true, save then reset after acquire. None uses the
+            server default (MAXMCP_RESET_ON_ACQUIRE, default false).
     """
     session = ctx.session
     try:

@@ -217,7 +217,7 @@ claude mcp add --scope user 3dsmax-mcp --url http://192.168.1.100:8000/mcp
 规则与提示：
 
 - 一个实例同时只允许一个用户；公共多 Agent 场景下请勿在「思考」时长时间占着 Max
-- 新租约默认重置场景（`MAXMCP_RESET_ON_ACQUIRE=true`），避免租户间场景串台
+- 场景重置为**用户主动 / 可选**：默认不重置。仅当 `acquire_instance(..., reset_scene=true)` 或服务端设置 `MAXMCP_RESET_ON_ACQUIRE=true` 时才会重置；重置前会先 `saveScene` 保存
 - 未获取实例就调用场景工具，会提示先调用 `acquire_instance`
 - 空闲超过 `MAXMCP_LOCK_TTL`（默认 **180 秒**）无工具活动会自动释放；会话断开也会立刻释放并取消排队
 - 相关环境变量：`MAXMCP_ACQUIRE_WAIT_SECONDS`（默认 60）、`MAXMCP_ACQUIRE_QUEUE_MAX`（默认 32）

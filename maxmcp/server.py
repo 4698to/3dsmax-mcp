@@ -225,6 +225,8 @@ _AUDIT_EXTRA = {
     "release_instance",
     "load_scene",
     "manage_scene",
+    "save_scene_as",
+    "save_as",
     "render_scene",
     "execute_maxscript",
     "execute_python",

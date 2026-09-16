@@ -130,51 +130,105 @@ struct SceneManageStruct
 		dir
 	),
 
+	fn isAbsolutePath p =
+	(
+		p = substituteString (p as string) "\\" "/"
+		if p.count < 2 do return false
+		-- Drive letter or UNC
+		(p[2] == ":") or (p[1] == "/" and p[2] == "/")
+	),
+
+	-- Max cwd / plugin-config junk (relative saves often land here).
+	fn isUnsafeSaveDir p =
+	(
+		local low = toLower (substituteString (p as string) "\\" "/")
+		(findString low "plugcfg") != undefined or \
+		(findString low "/enu/temp") != undefined or \
+		(findString low "/enu/plugcfg") != undefined
+	),
+
 	-- Save as 3 major versions older when the year is known (e.g. Max 2022 -> 2019).
 	-- Unnamed scenes get a random path under %TEMP%\\3dsmax-mcp\\.
 	-- NOTE: do not name this `saveAsVersion` — that collides with saveMaxFile().
-	fn saveScene =
+	fn saveToPath dest =
 	(
-		local fp = maxFilePath + maxFileName
-		if maxFileName == "" or fp == "" then
-		(
-			local guid = ((dotNetClass "System.Guid").NewGuid()).ToString("N")
-			fp = this.getCommsDir() + "scene_" + guid + ".max"
-		)
-		else
-		(
-			fp = substituteString fp "\\" "/"
-		)
+		dest = substituteString (dest as string) "\\" "/"
+		local parentDir = getFilenamePath dest
+		if parentDir != undefined and parentDir != "" do makeDir parentDir all:true
 
 		local mv = maxVersion() -- 低版本max 格式 #(17000, 44, 0)
-		local curYear = ((mv[1] * 0.001) as integer) + 1998
-		
-		local dest = fp
+		local curYear = 0
+		try (curYear = ((mv[1] * 0.001) as integer) + 1998) catch (curYear = 0)
+
 		local targetYear = 0
 		if curYear > 0 then
 		(
 			targetYear = curYear - 3
-			if targetYear < 2012 do (targetYear = 2012)
-			
+			if targetYear < 2012 do targetYear = 2012
 		)
 
 		local saved = false
 		try
 		(
+			-- With saveAsVersion, Max defaults useNewFile:false (Save Copy As) —
+			-- file is written but maxFileName / maxFilePath stay on the old scene.
+			-- Always force useNewFile:true so Save As updates the current scene.
 			if targetYear > 0 then
-			(
-				saved = saveMaxFile dest saveAsVersion:targetYear quiet:true
-			)
+				saved = saveMaxFile dest saveAsVersion:targetYear quiet:true useNewFile:true
 			else
-			(
-				saved = saveMaxFile dest quiet:true
-			)
+				saved = saveMaxFile dest quiet:true useNewFile:true
 		)
 		catch
 		(
 			return ("ERROR: save failed: " + (getCurrentException() as string))
 		)
 		if saved then dest else ("ERROR: saveMaxFile returned false: " + dest)
+	),
+
+	fn saveScene =
+	(
+		local _name = maxFileName
+		local fp = maxFilePath + maxFileName
+		-- Empty / Max plugcfg-temp junk → force local temp
+		if _name == undefined do _name = ""
+		if _name == "" or fp == "" or (this.isUnsafeSaveDir fp) then
+		(
+			if _name == "" then
+			(
+				local guid = ((dotNetClass "System.Guid").NewGuid()).ToString("N")
+				_name = "scene_" + guid + ".max"
+			)
+			else
+			(
+				-- basename only if path was junk
+				local leaf = filenameFromPath fp
+				if leaf != undefined and leaf != "" do _name = leaf
+			)
+			fp = this.getCommsDir() + _name
+		)
+		else
+		(
+			fp = substituteString fp "\\" "/"
+		)
+		this.saveToPath fp
+	),
+
+	-- Save/copy the scene to an explicit path (caller should pass absolute path).
+	-- Relative names are forced under getCommsDir so Max does not use plugcfg cwd.
+	fn saveSceneAs filePath =
+	(
+		if filePath == undefined or (filePath as string) == "" do
+			return "ERROR: empty file path"
+		local dest = substituteString (filePath as string) "\\" "/"
+		local ext = getFilenameType dest
+		if ext == undefined or ext == "" do dest = dest + ".max"
+		if not (this.isAbsolutePath dest) then
+		(
+			local leaf = filenameFromPath dest
+			if leaf == undefined or leaf == "" do leaf = dest
+			dest = this.getCommsDir() + leaf
+		)
+		this.saveToPath dest
 	),
 
 	-- Basic scene info as a JSON-ish string.
