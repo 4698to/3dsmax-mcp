@@ -105,9 +105,10 @@ and `capture_tyflow_editor` for foreign flows.
 For Data Channel or Max Creation Graph work, read [procedural-graphs.md](procedural-graphs.md) completely before acting. It contains the dedicated tool workflows, agentic compile/verify loop, safety gates, validation rules, and runtime pitfalls.
 
 ### Scene management
-- `manage_scene` (hold/fetch/reset/save/info/save_as/save_scene_as) — `save_as` needs `file_path`; **basename only** → `{WORKSPACE_DIR}/<name>.max`
+- `manage_scene` (hold/fetch/reset/save/info/save_as/save_scene_as/show_agent_banner/hide_agent_banner) — `save_as` needs `file_path`; **basename only** → `{WORKSPACE_DIR}/<name>.max`
 - `save_scene_as` / `save_as` — same Save As (directories in `file_path` ignored)
 - `load_scene` — `MCP_SceneManage.loadScene`
 - `get_unhidden_meshes_bones` — unhidden Editable_Poly/Mesh + Bone/Biped names and AnimHandles
 - `select_by_handles` — select by AnimHandle array (`MCP_SceneManage.selectByHandles`)
 - `get_state_sets`, `get_camera_sequence`
+- Agent viewport HUD: `acquire_instance` auto-shows 「正在被 AI Agent 接管，请勿操作」 (bottom-right); `release_instance` hides it. Manual: `manage_scene(action="show_agent_banner"|"hide_agent_banner")`.

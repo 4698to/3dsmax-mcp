@@ -97,6 +97,13 @@ def _select_by_instance_name(
         **{k: v for k, v in meta.items() if k != "scene_reset"},
     }
 
+    # Same HUD as acquire_instance (name-based select is also a lease).
+    from .instances import _best_effort_agent_banner
+
+    banner = _best_effort_agent_banner(bound, show=True)
+    if banner is not None:
+        result["agent_banner"] = banner
+
     # Local native bind when we know a live PID (same machine as this MCP process).
     native_pid = pid_hint or mine.get("pid")
     if native_pid:

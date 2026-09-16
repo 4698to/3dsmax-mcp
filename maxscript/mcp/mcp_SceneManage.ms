@@ -32,6 +32,119 @@ fn fn_dialogMonitor_missing_xfefs = (
 	false
 )
 
+-- Agent takeover banner: show pre-saved PNG via a borderless dialog
+-- (gw has no portable bitmap blit API across Max versions).
+global MCP_AgentBannerVisible = false
+global MCP_AgentBannerBmp = undefined
+global MCP_AgentBannerBmpSize = [0, 0]
+global MCP_AgentBannerImagePath = ""
+try (MCP_AgentBannerImagePath = (getFilenamePath (getSourceFileName())) + "agent_banner.png") catch ()
+global MCP_AgentBannerForm
+
+fn MCP_FreeAgentBannerBmp =
+(
+	try (if MCP_AgentBannerBmp != undefined do close MCP_AgentBannerBmp) catch ()
+	MCP_AgentBannerBmp = undefined
+	MCP_AgentBannerBmpSize = [0, 0]
+)
+
+fn MCP_LoadAgentBannerBmp =
+(
+	if MCP_AgentBannerBmp != undefined do return true
+	local imgPath = MCP_AgentBannerImagePath
+	if imgPath == undefined or imgPath == "" do return false
+	if not (doesFileExist imgPath) do return false
+	MCP_AgentBannerBmp = openBitmap imgPath
+	if MCP_AgentBannerBmp == undefined do return false
+	MCP_AgentBannerBmpSize = [MCP_AgentBannerBmp.width, MCP_AgentBannerBmp.height]
+	true
+)
+
+fn MCP_GetAgentBannerDialogPos bw bh =
+(
+	-- Prefer bottom-right of the Max main window; fall back to primary screen.
+	local margin = 16
+	local sx = 0
+	local sy = 0
+	local sw = sysInfo.desktopSize.x
+	local sh = sysInfo.desktopSize.y
+	try
+	(
+		local hwnd = windows.getMAXHWND()
+		local r = windows.getWindowPos hwnd
+		-- Some Max builds return #(l,t,r,b); others Box2 / Point4-like.
+		if classOf r == Array and r.count >= 4 then
+		(
+			sx = r[1]
+			sy = r[2]
+			sw = r[3] - r[1]
+			sh = r[4] - r[2]
+		)
+		else
+		(
+			try
+			(
+				sx = r.x
+				sy = r.y
+				sw = r.w
+				sh = r.h
+			)
+			catch ()
+		)
+	)
+	catch ()
+	local x = sx + sw - bw - margin
+	local y = sy + sh - bh - margin - 48 -- leave room for Max status bar
+	if x < sx + margin do x = sx + margin
+	if y < sy + margin do y = sy + margin
+	[x as integer, y as integer]
+)
+
+fn MCP_DestroyAgentBannerDialog =
+(
+	try
+	(
+		if MCP_AgentBannerForm != undefined do
+		(
+			try (if MCP_AgentBannerForm.BackgroundImage != undefined do MCP_AgentBannerForm.BackgroundImage.Dispose()) catch ()
+			MCP_AgentBannerForm.Close()
+			MCP_AgentBannerForm.Dispose()
+		)
+	)
+	catch ()
+	MCP_AgentBannerForm = undefined
+)
+
+fn MCP_ShowAgentBannerDialog =
+(
+	MCP_DestroyAgentBannerDialog()
+	local imgPath = MCP_AgentBannerImagePath
+	if imgPath == undefined or imgPath == "" do return false
+	if not (doesFileExist imgPath) do return false
+	local img = undefined
+	try (img = (dotNetClass "System.Drawing.Image").FromFile imgPath) catch (img = undefined)
+	if img == undefined do return false
+	local bw = img.Width
+	local bh = img.Height
+	local pos = MCP_GetAgentBannerDialogPos bw bh
+	local form = dotNetObject "System.Windows.Forms.Form"
+	form.Text = "MCP Agent"
+	form.FormBorderStyle = (dotNetClass "System.Windows.Forms.FormBorderStyle").None
+	form.ShowInTaskbar = false
+	form.TopMost = true
+	form.StartPosition = (dotNetClass "System.Windows.Forms.FormStartPosition").Manual
+	form.Size = dotNetObject "System.Drawing.Size" bw bh
+	form.Location = dotNetObject "System.Drawing.Point" (pos.x as integer) (pos.y as integer)
+	form.BackgroundImage = img
+	form.BackgroundImageLayout = (dotNetClass "System.Windows.Forms.ImageLayout").None
+	-- Soften click-through feel: no focus when shown
+	try (form.ShowWithoutActivation = true) catch ()
+	form.Show()
+	MCP_AgentBannerForm = form
+	MCP_AgentBannerBmpSize = [bw, bh]
+	true
+)
+
 struct SceneManageStruct
 (
 	-- Load a .max scene file with existence + version guards.
@@ -383,6 +496,27 @@ struct SceneManageStruct
 			"\"meshes\":" + (this.stringArrayToJson _geo_name) + "," + \
 			"\"bones\":" + (this.stringArrayToJson _bones_name) + \
 		"}"
+	),
+
+	-- Show Agent banner (pre-saved PNG in a borderless TopMost form).
+	-- text: is ignored; image is maxscript/mcp/agent_banner.png.
+	fn showAgentBanner text:undefined =
+	(
+		global MCP_AgentBannerVisible
+		MCP_AgentBannerVisible = true
+		if not (MCP_ShowAgentBannerDialog()) do
+			return ("ERROR: agent banner image not found: " + (MCP_AgentBannerImagePath as string))
+		"Agent banner shown"
+	),
+
+	-- Hide the Agent banner form (idempotent).
+	fn hideAgentBanner =
+	(
+		global MCP_AgentBannerVisible
+		MCP_AgentBannerVisible = false
+		MCP_DestroyAgentBannerDialog()
+		MCP_FreeAgentBannerBmp()
+		"Agent banner hidden"
 	)
 )
 MCP_SceneManage = SceneManageStruct()

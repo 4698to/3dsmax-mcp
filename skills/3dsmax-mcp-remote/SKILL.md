@@ -46,6 +46,7 @@ Drive save/load/reset **only** through these tools on B (never raw `saveMaxFile`
 | Save As to a path | `manage_scene(action="save_as", file_path=...)` **or** `save_as` / `save_scene_as` |
 | Load a `.max` | `load_scene(file_path=...)` |
 | Hold / fetch / reset | `manage_scene(action="hold"|"fetch"|"reset")` — reset is user-opt-in; saves first |
+| Agent 视口提示 | 租约自动：`acquire_instance` 显示 / `release_instance` 隐藏；或 `manage_scene(action="show_agent_banner"|"hide_agent_banner")` |
 
 Path tips:
 - For Save As, only the **file name** is used; directories agents invent are ignored.

@@ -13,6 +13,8 @@ _MS_SCENE_ACTIONS = {
     "reset": "MCP_SceneManage.resetScene()",
     "save": "MCP_SceneManage.saveScene()",
     "info": "MCP_SceneManage.getInfo()",
+    "show_agent_banner": "MCP_SceneManage.showAgentBanner()",
+    "hide_agent_banner": "MCP_SceneManage.hideAgentBanner()",
 }
 # Path-required actions handled by manage_scene(..., file_path=) → saveSceneAs
 _SAVE_AS_ACTIONS = frozenset({"save_as", "save_scene_as"})
@@ -118,13 +120,16 @@ def manage_scene(
 ) -> str:
     """Manage the 3ds Max scene state via MCP_SceneManage (or native hold/fetch/reset/save/info).
 
-    Actions: hold, fetch, reset, save, info, save_as, save_scene_as.
+    Actions: hold, fetch, reset, save, info, save_as, save_scene_as,
+    show_agent_banner, hide_agent_banner.
     ``save`` with no path re-saves the current scene file (or Temp if unsaved).
     ``save`` / ``save_as`` / ``save_scene_as`` with ``file_path`` or ``path`` keep
     only the **basename** and write under the shared workspace root (agent
     directories are ignored). Prefer ``file_path``; ``path`` is accepted as an alias
     because agents often pass that name.
     ``reset`` always saves first, then clears the scene (user-initiated only).
+    ``show_agent_banner`` / ``hide_agent_banner`` toggle the viewport HUD warning
+    (also auto-shown on acquire_instance / auto-hidden on release_instance).
     """
     from ..helpers.audit_log import clear_scene_path_cache, note_scene_path
 
@@ -141,7 +146,8 @@ def manage_scene(
 
     if action not in _ALL_MANAGE_ACTIONS:
         return (
-            "Unknown action: {0}. Use hold, fetch, reset, save, info, save_as, or save_scene_as.".format(
+            "Unknown action: {0}. Use hold, fetch, reset, save, info, save_as, "
+            "save_scene_as, show_agent_banner, or hide_agent_banner.".format(
                 action
             )
         )
@@ -155,6 +161,7 @@ def manage_scene(
             )
         return _save_scene_as_impl(requested)
 
+    # Banner is MaxScript-only; native manage_scene has no banner actions.
     if client.native_available and action in _NATIVE_SCENE_ACTIONS:
         if action == "reset":
             # User-initiated reset: save first (handles unsaved → Temp\3dsmax-mcp).

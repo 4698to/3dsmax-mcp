@@ -856,10 +856,24 @@ class InstanceManager:
         with self._lock:
             return len(self._wait_queue)
 
-    def _purge_stale_locks(self) -> None:
-        """Release locks held idle longer than the TTL (abandoned sessions)."""
+    def _hide_agent_banner(self, name: str) -> None:
+        """Best-effort clear the Max Agent HUD after a lease ends (never raises)."""
+        client = self._clients.get(name)
+        if client is None:
+            return
+        try:
+            client.send_command("MCP_SceneManage.hideAgentBanner()")
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("hide agent banner on %s failed: %s", name, exc)
+
+    def _purge_stale_locks(self) -> list[str]:
+        """Release locks held idle longer than the TTL (abandoned sessions).
+
+        Returns instance names that were freed so the caller can hide banners
+        **outside** the manager lock (send_command must not run under the lock).
+        """
         now = time.monotonic()
-        released = False
+        stale_names: list[str] = []
         for inst in self._instances:
             if inst.locked_by and inst.locked_at and (now - inst.locked_at) > self._lock_ttl:
                 logging.warning(
@@ -870,9 +884,10 @@ class InstanceManager:
                 self._by_session.pop(inst.locked_by, None)
                 inst.locked_by = None
                 inst.locked_at = None
-                released = True
-        if released:
+                stale_names.append(inst.name)
+        if stale_names:
             self._dispatch_waiters_locked()
+        return stale_names
 
     def _start_stale_purger(self) -> None:
         """Daemon thread: sweep expired locks every DEFAULT_PURGE_INTERVAL.
@@ -894,7 +909,9 @@ class InstanceManager:
             time.sleep(DEFAULT_PURGE_INTERVAL)
             try:
                 with self._lock:
-                    self._purge_stale_locks()
+                    stale = self._purge_stale_locks()
+                for name in stale:
+                    self._hide_agent_banner(name)
             except Exception:  # keep sweeping on transient errors
                 continue
 
@@ -1046,21 +1063,37 @@ class InstanceManager:
         reset_scene: bool,
     ) -> tuple[Optional[MaxClient], bool]:
         """Immediate acquire attempt. Returns (client, scene_reset_pending)."""
+        hide_names: list[str] = []
+        result: tuple[Optional[MaxClient], bool] = (None, False)
         with self._lock:
             self.refresh_registry()
-            self._purge_stale_locks()
+            hide_names.extend(self._purge_stale_locks())
             held = self._by_session.get(session)
             if held is not None:
                 if name is None or name == held:
-                    return self._clients[held], False
-                self._release_locked(session, held)
-                self._dispatch_waiters_locked()
-            try:
-                inst = self._pick_idle_locked(name)
-            except (InstanceBusyError, NoFreeInstanceError):
-                return None, False
-            client = self._grant_locked(session, inst)
-            return client, reset_scene
+                    result = (self._clients[held], False)
+                else:
+                    self._release_locked(session, held)
+                    self._dispatch_waiters_locked()
+                    hide_names.append(held)
+                    try:
+                        inst = self._pick_idle_locked(name)
+                    except (InstanceBusyError, NoFreeInstanceError):
+                        result = (None, False)
+                    else:
+                        client = self._grant_locked(session, inst)
+                        result = (client, reset_scene)
+            else:
+                try:
+                    inst = self._pick_idle_locked(name)
+                except (InstanceBusyError, NoFreeInstanceError):
+                    result = (None, False)
+                else:
+                    client = self._grant_locked(session, inst)
+                    result = (client, reset_scene)
+        for n in hide_names:
+            self._hide_agent_banner(n)
+        return result
 
     def acquire(
         self,
@@ -1305,12 +1338,15 @@ class InstanceManager:
             self._release_locked(session, held)
             self._dispatch_waiters_locked()
             logging.info("Session %s released instance %s", _display(session), held)
-            return {"released": held, "idle": True}
+        # Outside lock: clear Agent HUD so it does not stick after the lease.
+        self._hide_agent_banner(held)
+        return {"released": held, "idle": True}
 
     def release_all_for_session(self, session: object) -> None:
         """Defensive cleanup: cancel waits and free any lock (never raises)."""
         if session is None:
             return
+        held = None
         with self._lock:
             self._cancel_waiters_locked(session)
             held = self._by_session.get(session)
@@ -1322,6 +1358,8 @@ class InstanceManager:
                     held,
                 )
             self._dispatch_waiters_locked()
+        if held:
+            self._hide_agent_banner(held)
 
     def cancel_acquire_wait(self, session: object) -> None:
         """Cancel a pending acquire wait for this session (never raises)."""
@@ -1426,7 +1464,7 @@ class InstanceManager:
         self.refresh_registry()
         self.probe_all(force=False)
         with self._lock:
-            self._purge_stale_locks()
+            stale = self._purge_stale_locks()
             now = time.monotonic()
             out: list[dict[str, Any]] = []
             for inst in self._instances:
@@ -1462,7 +1500,9 @@ class InstanceManager:
                         ),
                     }
                 )
-            return out
+        for name in stale:
+            self._hide_agent_banner(name)
+        return out
 
     def get_my_instance(self, session: object) -> dict[str, Any]:
         """What this session holds, if anything."""
