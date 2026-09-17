@@ -141,7 +141,14 @@ static std::string NormalizeBackslashes(std::string path) {
 }
 
 static std::filesystem::path FsPath(const std::string& path) {
-#if (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L) || __cplusplus >= 202002L
+#ifdef _WIN32
+    // Texture paths reach us as UTF-8 (WideToUtf8 of the Max string). Building a
+    // filesystem::path from a narrow string decodes it with the active code page,
+    // not UTF-8, so any path with non-ASCII characters (Greek, accents, Cyrillic)
+    // resolves to the wrong name and the texture is reported as missing even
+    // though it is there. Convert back to wide explicitly instead.
+    return std::filesystem::path(Utf8ToWide(path));
+#elif (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L) || __cplusplus >= 202002L
     return std::filesystem::path(path);
 #else
     return std::filesystem::u8path(path);
@@ -183,7 +190,7 @@ static uintmax_t FileSizeOrZero(const std::string& path, bool* existsOut) {
 }
 
 static std::string ExtensionMismatchCode(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(FsPath(path), std::ios::binary);
     if (!f) return "";
     unsigned char bytes[8] = {};
     f.read((char*)bytes, sizeof(bytes));
