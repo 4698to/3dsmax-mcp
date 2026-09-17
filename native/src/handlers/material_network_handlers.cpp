@@ -155,14 +155,17 @@ static std::filesystem::path FsPath(const std::string& path) {
 #endif
 }
 
+static std::string FsPathUtf8(const std::filesystem::path& path) {
+    const auto text = path.u8string();
+    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+}
+
 static std::string FilenameOnly(const std::string& path) {
-    std::filesystem::path p(path);
-    return p.filename().string();
+    return FsPathUtf8(FsPath(path).filename());
 }
 
 static std::string ParentFolder(const std::string& path) {
-    std::filesystem::path p(path);
-    return p.parent_path().string();
+    return FsPathUtf8(FsPath(path).parent_path());
 }
 
 static int ExtractUdim(const std::string& path) {
@@ -283,7 +286,7 @@ static TextureFolderCatalog BuildTextureFolderCatalog(const std::string& folder)
 
     for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
         if (ec || !entry.is_regular_file()) continue;
-        std::string path = NormalizeBackslashes(entry.path().string());
+        std::string path = NormalizeBackslashes(FsPathUtf8(entry.path()));
         std::string fname = FilenameOnly(path);
         cat.byFilenameLower[Lower(fname)] = path;
 
@@ -794,12 +797,12 @@ static std::string RemappedPath(const std::string& oldPath,
     if (!textureFolder.empty() && !filename.empty()) {
         std::filesystem::path p = FsPath(textureFolder) / FsPath(filename);
         std::error_code ec;
-        if (std::filesystem::exists(p, ec) && !ec) return NormalizeBackslashes(p.string());
+        if (std::filesystem::exists(p, ec) && !ec) return NormalizeBackslashes(FsPathUtf8(p));
         if (catalog) {
             std::string catalogPath = LookupCatalogPath(catalog, filename);
             if (!catalogPath.empty()) return catalogPath;
         }
-        return NormalizeBackslashes(p.string());
+        return NormalizeBackslashes(FsPathUtf8(p));
     }
     return oldPath;
 }
