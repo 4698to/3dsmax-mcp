@@ -109,6 +109,7 @@ For Data Channel or Max Creation Graph work, read [procedural-graphs.md](procedu
 - `save_scene_as` / `save_as` — same Save As (directories in `file_path` ignored)
 - `load_scene` — `MCP_SceneManage.loadScene`
 - `get_unhidden_meshes_bones` — unhidden Editable_Poly/Mesh + Bone/Biped names and AnimHandles
+- `propose_skin_bones` — filter bones by signed surface distance + mesh core AABB (`MCP_SkinManage.proposeSkinBones`; outside keep uses half `max_dist`); pass `bones_handle` to GoSkin
 - `select_by_handles` — select by AnimHandle array (`MCP_SceneManage.selectByHandles`)
 - `get_state_sets`, `get_camera_sequence`
 - Agent viewport HUD: `acquire_instance` auto-shows 「正在被 AI Agent 接管，请勿操作」 (bottom-right); `release_instance` hides it. Manual: `manage_scene(action="show_agent_banner"|"hide_agent_banner")`.

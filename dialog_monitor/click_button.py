@@ -804,70 +804,96 @@ def click_menu_path(
     ocr_base: str = DEFAULT_OCR_BASE,
     score_min: float = 0.5,
     client: Any | None = None,
+    retries: int = 1,
 ) -> dict[str, Any]:
     """Open a Max menubar entry via OCR, then click a popup menu item.
 
     Example: click_menu_path("NDBox", "天晴盒子")
+
+    On OCR miss (desktop bumped / focus stolen), retries once by default
+    after a short pause and a best-effort Max window restore.
     """
     import time
 
     client = _ensure_max_client(client)
-    bar = capture_max_menu_bar(height=menu_bar_height, client=client)
-    step1 = click_ocr_in_capture(
-        menu,
-        bar,
-        ocr_base=ocr_base,
-        score_min=score_min,
-        client=client,
-    )
-    if not step1.get("ok"):
-        return {
-            "ok": False,
-            "error": f"failed to open menu {menu!r}: {step1.get('error')}",
-            "open": step1,
-        }
+    attempts = max(1, int(retries) + 1)
+    last: dict[str, Any] = {"ok": False, "error": "menu click not attempted"}
 
-    time.sleep(max(0.05, float(open_wait_s)))
+    for attempt in range(attempts):
+        if attempt > 0:
+            time.sleep(0.7)
+            try:
+                restore_max_window(client=client)
+            except Exception:
+                pass
+            time.sleep(0.25)
 
-    popup = capture_popup_menu(client=client)
-    if not popup.get("ok"):
-        # Fallback: capture under menubar click into Max temp, then promote.
-        sx, sy = step1["screen_xy"]
-        code = f"""(
+        bar = capture_max_menu_bar(height=menu_bar_height, client=client)
+        step1 = click_ocr_in_capture(
+            menu,
+            bar,
+            ocr_base=ocr_base,
+            score_min=score_min,
+            client=client,
+        )
+        if not step1.get("ok"):
+            last = {
+                "ok": False,
+                "error": f"failed to open menu {menu!r}: {step1.get('error')}",
+                "open": step1,
+                "attempt": attempt + 1,
+                "retried": attempt > 0,
+            }
+            # OCR miss / capture glitch → retry; hard errors still retry once (desktop bump).
+            continue
+
+        time.sleep(max(0.05, float(open_wait_s)))
+
+        popup = capture_popup_menu(client=client)
+        if not popup.get("ok"):
+            # Fallback: capture under menubar click into Max temp, then promote.
+            sx, sy = step1["screen_xy"]
+            code = f"""(
 local cap = MCP_DialogMonitor.captureScreenRect {int(sx) - 40} {int(sy)} 420 480
 if classOf cap == String then ("{{\\"ok\\":false,\\"error\\":\\"" + (MCP_DialogMonitor.escapeJson cap) + "\\"}}") else (
   MCP_DialogMonitor.metaJson 0 "MenuFallback" cap[1] MCP_DialogMonitor.lastScreenRect cap[2] cap[3] extra:"\\"source\\":\\"menu_fallback\\""
 )
 )"""
-        popup = _promote_capture_file(client, _parse_meta(_exec_ms(client, code)))
+            popup = _promote_capture_file(client, _parse_meta(_exec_ms(client, code)))
 
-    step2 = click_ocr_in_capture(
-        item,
-        popup,
-        ocr_base=ocr_base,
-        score_min=score_min,
-        client=client,
-    )
-    return {
-        "ok": bool(step2.get("ok")),
-        "menu": menu,
-        "item": item,
-        "open": {
-            "matched": step1.get("matched"),
-            "screen_xy": step1.get("screen_xy"),
-            "click": step1.get("click"),
-            "capture": step1.get("capture"),
-        },
-        "select": {
-            "matched": step2.get("matched"),
-            "screen_xy": step2.get("screen_xy"),
-            "click": step2.get("click"),
-            "capture": step2.get("capture"),
-            "ocr_texts": [ln.get("text") for ln in (step2.get("ocr_lines") or [])],
-            "error": step2.get("error"),
-        },
-        "error": None if step2.get("ok") else step2.get("error"),
-    }
+        step2 = click_ocr_in_capture(
+            item,
+            popup,
+            ocr_base=ocr_base,
+            score_min=score_min,
+            client=client,
+        )
+        last = {
+            "ok": bool(step2.get("ok")),
+            "menu": menu,
+            "item": item,
+            "attempt": attempt + 1,
+            "retried": attempt > 0,
+            "open": {
+                "matched": step1.get("matched"),
+                "screen_xy": step1.get("screen_xy"),
+                "click": step1.get("click"),
+                "capture": step1.get("capture"),
+            },
+            "select": {
+                "matched": step2.get("matched"),
+                "screen_xy": step2.get("screen_xy"),
+                "click": step2.get("click"),
+                "capture": step2.get("capture"),
+                "ocr_texts": [ln.get("text") for ln in (step2.get("ocr_lines") or [])],
+                "error": step2.get("error"),
+            },
+            "error": None if step2.get("ok") else step2.get("error"),
+        }
+        if last.get("ok"):
+            return last
+
+    return last
 
 
 def recognize_dialog(

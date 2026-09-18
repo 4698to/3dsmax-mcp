@@ -28,10 +28,17 @@ description: >-
 | Task | Prefer MCP tool | Or script (needs `MAXMCP_URL` = client’s B URL) |
 |------|-----------------|--------------------------------------------------|
 | List online Max instances | `list_instances` | `python list_online_instances.py` |
-| Viewport screenshot | `capture_viewport` (+ download) | `python capture_viewport_shot.py --out shot.png` |
+| Viewport screenshot | `capture_viewport` (+ download) — **no lease queue** if already holding or target busy; see below | `python capture_viewport_shot.py --out shot.png --no-acquire` when busy |
 | Upload file to workspace | `workspace_upload` / HTTP `/files/upload` | `python upload_to_mcp.py <path>` |
 | Load / save scene | `load_scene`, `manage_scene`, `save_as` | — (MCP tools only) |
 | GoSkin prepare (no 开始蒙皮) | `goskin_*` | `python goskin_dev_flow.py --instance <name>` |
+
+### Viewport capture vs leases (avoid WAIT_TIMEOUT)
+
+- Screenshot is a **short Max call**, not a long exclusive job. **Do not** `acquire_instance` and wait in the FIFO queue (~60s) only to capture.
+- If this session already holds the instance → `capture_viewport` only.
+- If `list_instances` shows the target **busy** → use `--no-acquire` (script) or skip; never block on acquire for a shot.
+- Full rules: [instance-locks.md](instance-locks.md).
 
 Details: [scripts/README.md](scripts/README.md). Scripts are stdlib HTTP only (no `maxmcp`). If unsure of the URL, use MCP tools directly and skip the scripts.
 
@@ -65,7 +72,7 @@ Principles:
 - Match the user's request. Do not run setup, discovery, or scene analysis by habit.
 - Do not call `get_bridge_status` or `get_session_context` as a session preamble.
 - Prefer a dedicated MCP tool over raw MAXScript when a tool clearly matches the task.
-- Do not render unless the user explicitly asks. Viewport capture is fine when visual proof is useful.
+- Do not render unless the user explicitly asks. Viewport capture is fine when visual proof is useful — **never wait in the acquire queue only to screenshot** ([instance-locks.md](instance-locks.md)).
 - Multiple Max instances: `list_max_instances`, `select_max_instance(pid|name)`, `get_selected_max_instance`, and `release_max_instance` are available in every profile. Prefer `name` from `list_instances` (e.g. `max-8765`) for remote/ini targets — it acquires a session lease without resetting the scene. `pid` binds local native pipes. The first successful native connection stays bound to that Max. Starting or claiming another Max only changes the default for unbound clients. If the selected Max closes, explicitly select another or release it; clients never silently switch. `MCP_MAX_PID` or `MCP_MAX_PIPE` pins the startup target (`MCP_MAX_PIPE` takes precedence). Release also clears startup pinning.
 
 ## Read on demand (modules)

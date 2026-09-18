@@ -368,8 +368,33 @@ struct SceneManageStruct
 	),
 	temp_geo = #(),
 	temp_bones = #(),
-    temp_geo_handles = #(),
-    temp_bones_handles = #(),
+	temp_geo_handles = #(),
+	temp_bones_handles = #(),
+	-- Mesh name filter for getunhidden_meshes_bones (case-insensitive).
+	-- Drop names starting with these prefixes, except exact allow-list entries.
+	meshExcludePrefixes = #("v_"),
+	meshExcludeAllowNames = #("v_body"),
+
+	-- true = skip this mesh name from unhidden mesh list.
+	fn isExcludedMeshName nodeName =
+	(
+		if nodeName == undefined do return false
+		local low = toLower (nodeName as string)
+		local allows = this.meshExcludeAllowNames
+		if allows == undefined do allows = #("v_body")
+		for a in allows do
+		(
+			if low == (toLower (a as string)) do return false
+		)
+		local prefixes = this.meshExcludePrefixes
+		if prefixes == undefined do prefixes = #("v_")
+		for pfx in prefixes do
+		(
+			local p = toLower (pfx as string)
+			if p.count > 0 and (findString low p) == 1 do return true
+		)
+		false
+	),
 
 	-- string array -> JSON array literal, e.g. #("a","b") -> "[\"a\",\"b\"]"
 	fn stringArrayToJson arr =
@@ -481,9 +506,12 @@ struct SceneManageStruct
 				local m_type = classOf o.baseObject
 				if m_type == Editable_Poly or m_type == Editable_Mesh do
 				(
-					append _geo_name o.name
-					append this.temp_geo o
-					append _geo_handle o.handle
+					if not (this.isExcludedMeshName o.name) do
+					(
+						append _geo_name o.name
+						append this.temp_geo o
+						append _geo_handle o.handle
+					)
 				)
 			)
 		)

@@ -23,6 +23,7 @@
 global MCP_Server
 global MCP_NativePipeRunning
 global MCP_SceneManage
+global MCP_SkinManage
 global MCP_UI
 
 -- .NET 事件经全局函数中转: struct 方法直接传给 dotNet.addEventHandler 在个别

@@ -104,6 +104,13 @@ MAXSCRIPT_SUGGESTION_RULES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] 
         ("get_unhidden_meshes_bones",),
     ),
     (
+        re.compile(
+            r"\bMCP_SkinManage\.proposeSkinBones\b|\bpropose_skin_bones\b",
+            re.IGNORECASE,
+        ),
+        ("propose_skin_bones", "get_unhidden_meshes_bones"),
+    ),
+    (
         re.compile(r"\bMCP_SceneManage\.selectByHandles\b", re.IGNORECASE),
         ("select_by_handles",),
     ),

@@ -22,7 +22,7 @@ from lib.mcp_http import (
 )
 
 
-def _as_dict(raw: Any) -> dict[str, Any]:
+def _as_dict(raw: Any, *, tool: str = "") -> dict[str, Any]:
     data = coerce_payload(raw)
     if isinstance(data, dict) and "ok" in data:
         if not data.get("ok"):
@@ -35,13 +35,31 @@ def _as_dict(raw: Any) -> dict[str, Any]:
         return {"result": inner}
     if isinstance(data, dict):
         return data
-    raise McpHttpError(f"unexpected tool payload: {type(data).__name__}")
+    where = f" after {tool}" if tool else ""
+    preview = ""
+    if isinstance(data, str):
+        preview = f" preview={data[:240]!r}"
+    raise McpHttpError(
+        f"unexpected tool payload: {type(data).__name__}{where}{preview}"
+    )
+
+
+def _call_dict(session: McpHttpSession, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    return _as_dict(session.call_tool(name, arguments), tool=name)
 
 
 def _idle_online(instances: list) -> list[dict]:
     out = []
     for inst in instances:
         if isinstance(inst, dict) and inst.get("online") and not inst.get("busy"):
+            out.append(inst)
+    return out
+
+
+def _busy_online(instances: list) -> list[dict]:
+    out = []
+    for inst in instances:
+        if isinstance(inst, dict) and inst.get("online") and inst.get("busy"):
             out.append(inst)
     return out
 
@@ -57,7 +75,15 @@ def main() -> int:
         action="store_true",
         help="After prepare, call goskin_confirm_start(user_confirmed=true)",
     )
-    ap.add_argument("--keep-lease", action="store_true")
+    ap.add_argument(
+        "--keep-lease",
+        action="store_true",
+        help=(
+            "On SUCCESS only: skip release_instance so a follow-up tool in the "
+            "SAME MCP HTTP session can reuse the Max. Failures always release. "
+            "Each new python process is a new session and cannot reclaim a prior keep-lease."
+        ),
+    )
     ap.add_argument("--menu", default="自动蒙皮")
     ap.add_argument("--item", default="GoSkinning")
     args = ap.parse_args()
@@ -67,9 +93,10 @@ def main() -> int:
 
     session = McpHttpSession(args.url, client_name="goskin-dev-flow", timeout=args.timeout)
     acquired = False
+    flow_ok = False
     summary: dict[str, Any] = {"ok": False}
     try:
-        health = _as_dict(session.call_tool("check_dialog_ocr_health"))
+        health = _call_dict(session, "check_dialog_ocr_health")
         summary["ocr_health"] = {
             k: health.get(k) for k in ("ok", "status", "endpoints", "workspace") if k in health
         } or health
@@ -82,11 +109,20 @@ def main() -> int:
             die("list_instances failed")
         instances = listed.get("instances") or []
         idle = _idle_online(instances)
+        busy = _busy_online(instances)
         summary["idle_count"] = len(idle)
         summary["idle_names"] = [i.get("name") for i in idle]
+        summary["busy_names"] = [i.get("name") for i in busy]
 
         if not idle:
-            die("no idle online Max instances")
+            busy_s = ", ".join(str(n) for n in summary["busy_names"]) or "(none)"
+            die(
+                "no idle online Max instances. "
+                f"busy={busy_s}. "
+                "If a prior goskin_dev_flow used --keep-lease (or crashed mid-lease), "
+                "wait for idle TTL (~180s) or call release_instance from that same MCP session; "
+                "a new python process cannot release another session's lease."
+            )
         if len(idle) > 1 and not args.instance:
             die(
                 "multiple idle instances; pass --instance NAME. candidates: "
@@ -96,13 +132,13 @@ def main() -> int:
         acq_args: dict[str, Any] = {}
         if args.instance:
             acq_args["name"] = args.instance
-        acq = _as_dict(session.call_tool("acquire_instance", acq_args))
+        acq = _call_dict(session, "acquire_instance", acq_args)
         if acq.get("code") and not acq.get("acquired"):
             die(json.dumps(acq, ensure_ascii=False))
         acquired = True
         summary["acquired"] = acq
 
-        unhidden = _as_dict(session.call_tool("get_unhidden_meshes_bones"))
+        unhidden = _call_dict(session, "get_unhidden_meshes_bones")
         summary["unhidden"] = {
             "meshes": unhidden.get("meshes") or unhidden.get("mesh_names"),
             "bones": unhidden.get("bones") or unhidden.get("bone_names"),
@@ -110,11 +146,10 @@ def main() -> int:
             "bones_handle": unhidden.get("bones_handle"),
         }
 
-        ready = _as_dict(
-            session.call_tool(
-                "goskin_ensure_ready",
-                {"menu": args.menu, "item": args.item},
-            )
+        ready = _call_dict(
+            session,
+            "goskin_ensure_ready",
+            {"menu": args.menu, "item": args.item},
         )
         summary["ensure_ready"] = {
             k: ready.get(k) for k in ("ok", "status", "error", "tab") if k in ready
@@ -129,10 +164,40 @@ def main() -> int:
         bh = unhidden.get("bones_handle")
         if not mesh_names and mh:
             run_args["mesh_handles"] = mh
-        if not bone_names and bh:
+        if not bone_names and mh:
+            try:
+                proposed = _call_dict(
+                    session, "propose_skin_bones", {"mesh_handles": mh}
+                )
+                summary["propose_skin_bones"] = {
+                    "ok": proposed.get("ok"),
+                    "bones": proposed.get("bones"),
+                    "bones_handle": proposed.get("bones_handle"),
+                    "warning": proposed.get("warning"),
+                    "max_dist": proposed.get("max_dist"),
+                }
+                pbh = proposed.get("bones_handle")
+                if proposed.get("ok") is not False and pbh:
+                    run_args["bone_handles"] = pbh
+                elif bh:
+                    run_args["bone_handles"] = bh
+            except McpHttpError as exc:
+                msg = str(exc)
+                if "Unknown tool" in msg and "propose_skin_bones" in msg:
+                    summary["propose_skin_bones"] = {
+                        "ok": False,
+                        "skipped": True,
+                        "error": msg,
+                        "hint": "Restart maxmcp so MCP tool propose_skin_bones is registered",
+                    }
+                    if bh:
+                        run_args["bone_handles"] = bh
+                else:
+                    raise
+        elif not bone_names and bh:
             run_args["bone_handles"] = bh
 
-        prep = _as_dict(session.call_tool("goskin_run_skin", run_args))
+        prep = _call_dict(session, "goskin_run_skin", run_args)
         summary["run_skin"] = {
             "awaiting_start_confirm": prep.get("awaiting_start_confirm"),
             "user_prompt": prep.get("user_prompt"),
@@ -142,27 +207,38 @@ def main() -> int:
         }
 
         if args.confirm_start:
-            conf = _as_dict(
-                session.call_tool(
-                    "goskin_confirm_start",
-                    {"user_confirmed": True},
-                )
+            conf = _call_dict(
+                session,
+                "goskin_confirm_start",
+                {"user_confirmed": True},
             )
             summary["confirm_start"] = {
                 k: conf.get(k) for k in ("ok", "status", "error", "completed") if k in conf
             } or conf
 
         summary["ok"] = True
+        flow_ok = True
         print_json(summary)
         return 0
     except McpHttpError as exc:
         summary["error"] = str(exc)
+        summary["lease_note"] = (
+            "failure releases the lease even with --keep-lease "
+            "(keep-lease applies only after a successful prepare)"
+        )
         print_json(summary)
         return 1
     finally:
-        if acquired and not args.keep_lease:
+        # --keep-lease only on success; OCR/tool failures must free Max for others.
+        keep = bool(args.keep_lease) and flow_ok
+        if acquired and not keep:
             try:
                 session.call_tool("release_instance")
+                if not flow_ok and args.keep_lease:
+                    print(
+                        "warn: released lease despite --keep-lease (flow failed)",
+                        file=sys.stderr,
+                    )
             except Exception as exc:  # noqa: BLE001
                 print(f"warn: release_instance failed: {exc}", file=sys.stderr)
 

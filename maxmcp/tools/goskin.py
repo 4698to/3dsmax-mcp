@@ -112,7 +112,9 @@ def goskin_run_skin(
 ) -> dict[str, Any]:
     """Prepare GoSkin lists (cleanup→选定 mesh/bones) then PAUSE for user confirm.
 
-    Prefer ``mesh_handles`` / ``bone_handles`` from ``get_unhidden_meshes_bones``.
+    Prefer ``mesh_handles`` / ``bone_handles`` from ``get_unhidden_meshes_bones``,
+    or ``bones_handle`` from ``propose_skin_bones`` when the scene has extra
+    distant skeletons.
     Default click_start=false: returns confirmation summary (mesh/joint names &
     counts) and does NOT click 「开始蒙皮」. After the user agrees, call
     goskin_confirm_start(user_confirmed=true).

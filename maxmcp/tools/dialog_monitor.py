@@ -197,6 +197,7 @@ def click_plugin_menu_path(
 
     Captures the Max top menu strip, clicks `menu` (e.g. "NDBox"), waits for the
     Win32 popup (#32768), then OCR-clicks `item` (e.g. "天晴盒子").
+    If OCR misses (desktop bumped), retries once after restoring the Max window.
     """
     if not (menu or "").strip():
         raise ValueError("menu is required")

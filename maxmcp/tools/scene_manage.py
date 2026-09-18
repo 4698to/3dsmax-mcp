@@ -2,7 +2,7 @@ import json as _json
 from pathlib import Path
 from typing import Any, Optional
 
-from ..coerce import IntList
+from ..coerce import IntList, StrList
 from ..server import WORKSPACE_DIR, mcp, client
 
 
@@ -46,7 +46,7 @@ def _parse_scene_manage_json(raw: Any) -> dict[str, Any]:
     try:
         data = _json.loads(text)
     except (_json.JSONDecodeError, TypeError):
-        return {"ok": False, "error": f"bad MCP_SceneManage JSON: {raw!r}", "raw": raw}
+        return {"ok": False, "error": f"bad MaxScript JSON: {raw!r}", "raw": raw}
     if not isinstance(data, dict):
         return {
             "ok": False,
@@ -55,6 +55,18 @@ def _parse_scene_manage_json(raw: Any) -> dict[str, Any]:
         }
     data.setdefault("ok", True)
     return data
+
+
+def _maxscript_int_array(values: list[int]) -> str:
+    return "#(" + ", ".join(str(v) for v in values) + ")"
+
+
+def _maxscript_string_array(values: list[str]) -> str:
+    parts: list[str] = []
+    for s in values:
+        esc = str(s).replace("\\", "\\\\").replace('"', '\\"')
+        parts.append(f'"{esc}"')
+    return "#(" + ", ".join(parts) + ")"
 
 
 def _resolve_save_as_path(file_path: str) -> str:
@@ -234,7 +246,9 @@ def get_unhidden_meshes_bones() -> dict[str, Any]:
 
     Calls ``MCP_SceneManage.getunhidden_meshes_bones``. Returns names plus
     AnimHandle arrays (``meshes_handle``, ``bones_handle``) for
-    ``select_by_handles`` / GoSkin.
+    ``select_by_handles`` / GoSkin. Meshes whose names start with ``v_`` are
+    omitted, except the exact name ``v_body`` (case-insensitive). For skinning
+    bone *filtering*, prefer ``propose_skin_bones`` after collecting mesh handles.
     """
     raw = _call_scene_manage("MCP_SceneManage.getunhidden_meshes_bones()")
     data = _parse_scene_manage_json(raw)
@@ -252,6 +266,85 @@ def get_unhidden_meshes_bones() -> dict[str, Any]:
 
 
 @mcp.tool()
+def propose_skin_bones(
+    mesh_handles: IntList,
+    bone_handles: Optional[IntList] = None,
+    pad_ratio: float = 0.05,
+    abs_padding: float = 0.0,
+    sample_count: int = 5,
+    exclude_prefixes: Optional[StrList] = None,
+) -> dict[str, Any]:
+    """Propose Bone/Biped nodes for skinning by mesh surface proximity.
+
+    Calls ``MCP_SkinManage.proposeSkinBones`` (no Skin weights required). Uses
+    signed distance (``closestFace`` / hit normal): samples at bone pivot, axis
+    end, and world AABB center. A bone is kept if a sample is confirmed inside
+    the mesh core AABB, or if the nearest outside distance is within
+    ``0.5 * max(abs_padding, pad_ratio * mesh_diag)``. Ancestors of near bones
+    are always filled in. Use returned ``bones_handle`` with ``goskin_run_skin``.
+
+    Args:
+        mesh_handles: Target mesh AnimHandles (required).
+        bone_handles: Optional candidate bones; omit to scan unhidden Bone/Biped.
+        pad_ratio: Distance threshold as a fraction of mesh AABB diagonal
+            (outside keep uses half of that threshold).
+        abs_padding: Absolute distance threshold (scene units); max with pad_ratio.
+        sample_count: Kept for API compatibility; Max uses fixed 3-point sampling.
+        exclude_prefixes: Name prefixes to skip (default keeps Max-side ``#("v_")``
+            unless you pass an explicit list, including empty to disable).
+    """
+    mesh_ints: list[int] = []
+    for h in mesh_handles or []:
+        try:
+            mesh_ints.append(int(h))
+        except (TypeError, ValueError):
+            return {"ok": False, "code": "BAD_PARAM", "error": f"invalid mesh handle: {h!r}"}
+    if not mesh_ints:
+        return {"ok": False, "code": "BAD_PARAM", "error": "mesh_handles is empty"}
+
+    bone_arr = "undefined"
+    if bone_handles:
+        bone_ints: list[int] = []
+        for h in bone_handles:
+            try:
+                bone_ints.append(int(h))
+            except (TypeError, ValueError):
+                return {"ok": False, "code": "BAD_PARAM", "error": f"invalid bone handle: {h!r}"}
+        bone_arr = _maxscript_int_array(bone_ints)
+
+    pr = float(pad_ratio)
+    ap = float(abs_padding)
+    sc = max(1, min(int(sample_count or 5), 32))
+    mesh_arr = _maxscript_int_array(mesh_ints)
+
+    prelude = ""
+    if exclude_prefixes is not None:
+        prelude = (
+            f"MCP_SkinManage.excludePrefixes = {_maxscript_string_array(list(exclude_prefixes))}\n"
+        )
+
+    ms = (
+        prelude
+        + "(if MCP_SkinManage == undefined then "
+        + '"{\\"ok\\":false,\\"code\\":\\"PLUGIN_MISSING\\",\\"error\\":\\"MCP_SkinManage not loaded; fileIn skin_Manage.ms\\"}" '
+        + f"else MCP_SkinManage.proposeSkinBones {mesh_arr} boneHandles:{bone_arr} "
+        + f"padRatio:{pr} absPadding:{ap} sampleCount:{sc})"
+    )
+    raw = _call_scene_manage(ms)
+    data = _parse_scene_manage_json(raw)
+    if data.get("ok") is False and data.get("code") is None and "error" in data:
+        return data
+    # Normalize list fields for callers
+    if isinstance(data, dict) and data.get("ok") is not False:
+        data.setdefault("ok", True)
+        if "bones_handle" in data:
+            data["bones_handle"] = list(data.get("bones_handle") or [])
+        if "bones" in data:
+            data["bones"] = list(data.get("bones") or [])
+    return data
+
+
+@mcp.tool()
 def select_by_handles(handles: Optional[IntList] = None) -> dict[str, Any]:
     """Select scene nodes by AnimHandle (``MCP_SceneManage.selectByHandles``).
 
@@ -264,7 +357,7 @@ def select_by_handles(handles: Optional[IntList] = None) -> dict[str, Any]:
             ints.append(int(h))
         except (TypeError, ValueError):
             return {"ok": False, "error": f"invalid handle value: {h!r}", "handles": list(handles or [])}
-    arr = "#(" + ", ".join(str(h) for h in ints) + ")"
+    arr = _maxscript_int_array(ints)
     raw = _call_scene_manage(f"MCP_SceneManage.selectByHandles {arr}")
     data = _parse_scene_manage_json(raw)
     data.setdefault("handles", ints)

@@ -82,6 +82,7 @@ Task Progress:
 - [ ] check_dialog_ocr_health
 - [ ] goskin_ensure_ready
 - [ ] get_unhidden_meshes_bones（或已知名时跳过）
+- [ ] propose_skin_bones(mesh_handles=...)（多骨架/杂骨时筛骨；单骨架可跳过）
 - [ ] goskin_run_skin(mesh_handles=..., bone_handles=..., click_start=false)
 - [ ] 向用户展示 user_prompt / 确认摘要；等待用户 OK
 - [ ] goskin_confirm_start(user_confirmed=true)   # 仅在用户确认后
@@ -95,13 +96,14 @@ Task Progress:
 | 健康检查 | `check_dialog_ocr_health` | OCR 可达 |
 | 打开 UI | `goskin_ensure_ready` | 全局蒙皮页可见「编辑区」/「开始蒙皮」 |
 | 收集对象 | `get_unhidden_meshes_bones` | `meshes_handle` / `bones_handle` 非空 |
+| 筛骨 | `propose_skin_bones(mesh_handles=...)` | `bones_handle` 为邻近骨（可调 `pad_ratio`） |
 | 准备 | `goskin_run_skin` | `awaiting_start_confirm=true`，模型≥1、关节≥1 |
 | 门禁 | （对话） | 用户同意名称/数量 |
 | 开始 | `goskin_confirm_start(user_confirmed=true)` | OCR「完成」→ 点「操作成功」的「确定」（默认等 300s） |
 
 `goskin_run_auto` = ensure + run_skin；默认仍会在「开始蒙皮」前 **暂停**。
 
-优先传入 `mesh_handles` / `bone_handles`（`get_unhidden_meshes_bones` 返回的 AnimHandle）。已知对象名时也可传 `mesh_names` / `bone_names`。否则在点「选定」前确保 Max 中已有有效选择。不要为收集未隐藏网格/骨骼再写临时 MAXScript。
+优先传入 `mesh_handles` / `bone_handles`。多骨架或场景杂骨时：先 `get_unhidden_meshes_bones`，再 `propose_skin_bones(mesh_handles=meshes_handle)`，把返回的 `bones_handle` 交给 `goskin_run_skin`（不要把全部未隐藏骨原样塞进 GoSkin）。已知对象名时也可传 `mesh_names` / `bone_names`。不要为收集未隐藏网格/骨骼再写临时 MAXScript。
 
 `run_goskin_skin` 内部顺序（已实现——不要自行重写）：
 
@@ -116,6 +118,7 @@ Task Progress:
 
 | 现象 | 可能原因 | 处理 |
 |------|----------|------|
+| 菜单 OCR 偶发 miss | 操作时别人误动桌面 / 焦点被抢 | `click_menu_path` **自动再试 1 次**（restore Max 窗口后重截）；仍失败再查 menu/item |
 | 点击 ok 但 OCR 无变化 | 锁屏 / RDP 断连 | 解锁可交互桌面 |
 | 警告弹窗 / UI 卡住 | 未聚焦列表槽位就点「选定」 | 点「确定」dismiss，再先聚焦「(选中后在编辑区添加)」 |
 | `mesh_not_added` | 槽位点偏、Y 映射错误、或选择为空 | 解锁后重跑；传入 mesh 名；检查 client-rect 映射 |

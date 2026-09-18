@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Acquire a Max lease, capture viewport, download PNG via HTTP."""
+"""Acquire a Max lease, capture viewport, download PNG via HTTP.
+
+Do not queue for a screenshot when the target is busy: pass --no-acquire
+(see remote skill instance-locks.md). Capture talks to Max briefly but does
+not require an exclusive lease the way GoSkin does.
+"""
 
 from __future__ import annotations
 
@@ -32,6 +37,15 @@ def _tool_dict(raw) -> dict:
     return data
 
 
+def _instance_busy(listed: dict, name: str | None) -> bool:
+    if not name:
+        return False
+    for inst in listed.get("instances") or []:
+        if isinstance(inst, dict) and inst.get("name") == name:
+            return bool(inst.get("busy"))
+    return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     add_common_args(ap)
@@ -52,7 +66,10 @@ def main() -> int:
     ap.add_argument(
         "--no-acquire",
         action="store_true",
-        help="Skip acquire_instance (single-instance / already held)",
+        help=(
+            "Skip acquire_instance (use when target is busy or this session "
+            "already holds Max — never wait in the lease queue just to screenshot)"
+        ),
     )
     ap.add_argument("--json", action="store_true", help="Print capture metadata JSON")
     args = ap.parse_args()
@@ -64,12 +81,33 @@ def main() -> int:
     session = McpHttpSession(args.url, client_name="capture-viewport-shot", timeout=args.timeout)
     acquired = False
     try:
-        if not args.no_acquire:
+        skip_acquire = bool(args.no_acquire)
+        if not skip_acquire and args.instance:
+            # Avoid 60s WAIT_TIMEOUT when another agent already holds the Max.
+            listed_raw = coerce_payload(session.call_tool("list_instances"))
+            if isinstance(listed_raw, dict) and "ok" in listed_raw:
+                listed_raw = envelope_ok(listed_raw)
+                listed_raw = coerce_payload(listed_raw)
+            if isinstance(listed_raw, dict) and _instance_busy(listed_raw, args.instance):
+                print(
+                    f"warn: {args.instance} is busy — capturing with --no-acquire "
+                    f"(do not queue for screenshots)",
+                    file=sys.stderr,
+                )
+                skip_acquire = True
+
+        if not skip_acquire:
             acq_args = {}
             if args.instance:
                 acq_args["name"] = args.instance
             acq = _tool_dict(session.call_tool("acquire_instance", acq_args))
             if acq.get("acquired") is False or acq.get("code"):
+                code = acq.get("code") or ""
+                if code in {"WAIT_TIMEOUT", "INSTANCE_BUSY", "QUEUE_FULL", "NO_FREE_INSTANCE"}:
+                    die(
+                        json.dumps(acq, ensure_ascii=False)
+                        + "\nHint: for screenshots use --no-acquire instead of waiting in the lease queue."
+                    )
                 die(json.dumps(acq, ensure_ascii=False))
             acquired = True
 
@@ -101,6 +139,8 @@ def main() -> int:
             "out": str(out.resolve()),
             "bytes": out.stat().st_size,
             "capture": {k: meta.get(k) for k in ("file", "download_url", "width", "height", "source") if k in meta},
+            "acquired": acquired,
+            "no_acquire": skip_acquire,
         }
         if args.json:
             print_json(summary)

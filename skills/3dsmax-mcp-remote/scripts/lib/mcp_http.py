@@ -202,24 +202,55 @@ def unwrap_tool_result(obj: dict[str, Any]) -> Any:
     return res
 
 
+def _unwrap_maxscript_json_string(s: str) -> str:
+    """Strip a MaxScript-quoted string so embedded JSON can be parsed."""
+    text = (s or "").strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        text = text[1:-1]
+        text = (
+            text.replace('\\"', '"')
+            .replace("\\\\", "\\")
+            .replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+        )
+    return text
+
+
 def coerce_payload(value: Any) -> Any:
-    """If tool returned a JSON string (e.g. list_instances), parse it."""
-    if isinstance(value, str):
-        s = value.strip()
+    """If tool returned a JSON string (possibly double-encoded / Max-quoted), parse it."""
+    cur: Any = value
+    for _ in range(4):
+        if not isinstance(cur, str):
+            break
+        s = cur.strip()
+        if not s:
+            break
+        # JSON string literal → peel one layer
+        if s.startswith('"'):
+            try:
+                cur = json.loads(s)
+                continue
+            except json.JSONDecodeError:
+                unwrapped = _unwrap_maxscript_json_string(s)
+                if unwrapped != s:
+                    cur = unwrapped
+                    continue
+                break
         if s.startswith("{") or s.startswith("["):
             try:
-                return json.loads(s)
+                cur = json.loads(s)
+                continue
             except json.JSONDecodeError:
-                return value
-    if isinstance(value, dict) and "result" in value and "ok" in value:
-        inner = value.get("result")
+                break
+        break
+
+    if isinstance(cur, dict) and "result" in cur and "ok" in cur:
+        inner = cur.get("result")
         if isinstance(inner, str):
-            try:
-                return json.loads(inner)
-            except json.JSONDecodeError:
-                return value
-        return value
-    return value
+            return coerce_payload(inner)
+        return cur
+    return cur
 
 
 def envelope_ok(value: Any) -> Any:
