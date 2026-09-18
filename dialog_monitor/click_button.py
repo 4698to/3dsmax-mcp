@@ -422,40 +422,59 @@ local _dmOut = _dmDir + "dialog_monitor_" + (timeStamp() as string) + ".png"
         local matches = MCP_DialogMonitor.findDialog visibleOnly:true parentType:"desktop"
         if matches.count == 0 then "ERROR: dialog not found"
         else (
-          local hwnd = MCP_DialogMonitor.asHwndInt (matches[1][1])
-          local dlgTitle = MCP_DialogMonitor.normalizeTitle (matches[1][5])
-          local geom = MCP_DialogMonitor.getWindowGeom hwnd
-          if geom == undefined then "ERROR: could not read window geometry"
-          else (
-            local bmp = undefined
-            local snapErr = undefined
-            try (bmp = windows.snapshot hwnd) catch (snapErr = (getCurrentException() as string))
-            if snapErr != undefined then ("ERROR: windows.snapshot failed: " + snapErr)
-            else if bmp == undefined then "ERROR: snapshot returned undefined"
-            else (
-              local imageW = bmp.width
-              local imageH = bmp.height
-              local saved = false
-              local saveErr = undefined
-              try (
-                bmp.filename = _dmOut
-                saved = save bmp
-              ) catch (saveErr = (getCurrentException() as string))
-              try (close bmp) catch ()
-              if saveErr != undefined then ("ERROR: save failed: " + saveErr)
-              else if not saved then ("ERROR: save returned false: " + _dmOut)
-              else (
+          local result = "ERROR: snapshot returned undefined"
+          local mi = 1
+          while mi <= matches.count and result == "ERROR: snapshot returned undefined" do
+          (
+            local hwnd = MCP_DialogMonitor.asHwndInt (matches[mi][1])
+            local dlgTitle = MCP_DialogMonitor.normalizeTitle (matches[mi][5])
+            local geom = MCP_DialogMonitor.getWindowGeom hwnd
+            mi += 1
+            if geom != undefined and geom[3] >= 8 and geom[4] >= 8 do
+            (
+              local bmp = undefined
+              try (bmp = windows.snapshot hwnd) catch ()
+              local imageW = 0
+              local imageH = 0
+              local savedPath = ""
+              if bmp != undefined then
+              (
+                imageW = bmp.width
+                imageH = bmp.height
+                local saved = false
+                try (
+                  bmp.filename = _dmOut
+                  saved = save bmp
+                ) catch ()
+                try (close bmp) catch ()
+                if saved do savedPath = _dmOut
+              )
+              -- Message boxes centered on the screen (Max not maximized) often
+              -- make windows.snapshot return undefined. Copy the window rect.
+              if savedPath == "" do
+              (
+                local cap = MCP_DialogMonitor.captureScreenRect geom[1] geom[2] geom[3] geom[4] outfile:_dmOut
+                if classOf cap != String do
+                (
+                  savedPath = cap[1]
+                  imageW = cap[2]
+                  imageH = cap[3]
+                )
+              )
+              if savedPath != "" do
+              (
                 MCP_DialogMonitor.lastHwnd = hwnd
                 MCP_DialogMonitor.lastTitle = dlgTitle
-                MCP_DialogMonitor.lastCapturePath = _dmOut
+                MCP_DialogMonitor.lastCapturePath = savedPath
                 MCP_DialogMonitor.lastImageWidth = imageW
                 MCP_DialogMonitor.lastImageHeight = imageH
-                "OK|" + (hwnd as string) + "|" + dlgTitle + "|" + _dmOut + "|" + \
+                result = "OK|" + (hwnd as string) + "|" + dlgTitle + "|" + savedPath + "|" + \
                   (geom[1] as string) + "|" + (geom[2] as string) + "|" + (geom[3] as string) + "|" + (geom[4] as string) + "|" + \
                   (imageW as string) + "|" + (imageH as string) + "|" + (matches.count as string)
               )
             )
           )
+          result
         )
     )"""
     raw = _exec_ms(client, code).strip().strip('"')
@@ -636,7 +655,10 @@ def click_at_screen(
     hwnd: int = 0,
     client: Any | None = None,
 ) -> dict[str, Any]:
-    """Click screen coords inside Max (keeps Max-side work to one short call)."""
+    """Click screen coords inside Max (keeps Max-side work to one short call).
+
+    Max closes a visible MAXScript Listener first so the click is not stolen.
+    """
     client = _ensure_max_client(client)
     ensure_dialog_monitor_loaded(client)
     code = f"MCP_DialogMonitor.clickAtScreen {int(x)} {int(y)} foregroundHwnd:{int(hwnd)}"

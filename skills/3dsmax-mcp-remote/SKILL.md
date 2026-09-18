@@ -31,7 +31,7 @@ description: >-
 | Viewport screenshot | `capture_viewport` (+ download) — **no lease queue** if already holding or target busy; see below | `python capture_viewport_shot.py --out shot.png --no-acquire` when busy |
 | Upload file to workspace | `workspace_upload` / HTTP `/files/upload` | `python upload_to_mcp.py <path>` |
 | Load / save scene | `load_scene`, `manage_scene`, `save_as` | — (MCP tools only) |
-| GoSkin prepare (no 开始蒙皮) | `goskin_*` | `python goskin_dev_flow.py --instance <name>` |
+| GoSkin prepare (no 开始蒙皮) | do **not** call `goskin_*` yourself | `python goskin_dev_flow.py --instance <name> --scene <local.max>` |
 
 ### Viewport capture vs leases (avoid WAIT_TIMEOUT)
 
@@ -51,7 +51,7 @@ Drive save/load/reset **only** through these tools on B (never raw `saveMaxFile`
 | Scene summary (path, counts) | `manage_scene(action="info")` |
 | Save current file (or Temp if unsaved) | `manage_scene(action="save")` |
 | Save As to a path | `manage_scene(action="save_as", file_path=...)` **or** `save_as` / `save_scene_as` |
-| Load a `.max` | `load_scene(file_path=...)` |
+| Load a `.max` | `load_scene(file_path=<upload local_path>)` — absolute path on the Max host; not `url`, not a bare filename |
 | Hold / fetch / reset | `manage_scene(action="hold"|"fetch"|"reset")` — reset is user-opt-in; saves first |
 | Agent 视口提示 | 租约自动：`acquire_instance` 显示 / `release_instance` 隐藏；或 `manage_scene(action="show_agent_banner"|"hide_agent_banner")` |
 
@@ -61,6 +61,18 @@ Path tips:
 - Pass `file_path` **or** `path` (alias). `manage_scene(action="save", path="foo.max")` is treated as Save As.
 - Do **not** use `action="save_as:/path"` — pass `file_path`/`path` as a separate argument.
 - Full catalog: [tool-reference.md](tool-reference.md) § Scene management. Leases: [instance-locks.md](instance-locks.md).
+
+## GoSkin：只跑 `goskin_dev_flow.py`
+
+不要自己选工具，不要先 `load_scene` 再写 `call('goskin_ensure_ready')`，也不要再用 `list_online_instances.py` 看 busy。一条命令、一个 MCP 会话做完：上传 → `load_scene(local_path)` → `goskin_ensure_ready` → `propose_skin_bones` → `goskin_run_skin`（不点「开始蒙皮」）。
+
+```bash
+python goskin_dev_flow.py --url <mcp.json 里的 URL> --instance <name> --scene <本机.max>
+```
+
+场景已经在 Max 里、用户没有给文件时，去掉 `--scene`。跑之前不要在 IDE 里 `acquire_instance`；若实例已被本对话占着，先在那个会话 `release_instance`（不卸载场景）再跑脚本。`--url` 必须等于 mcp.json，不要猜 localhost。
+
+`load_scene` 只用脚本拿到的 `local_path`。不要把上传结果里的 `url` 或文件名传进去。OCR 细节见 [references/goskin-ocr-click.md](references/goskin-ocr-click.md)。
 
 ## Tool Profile Routing
 

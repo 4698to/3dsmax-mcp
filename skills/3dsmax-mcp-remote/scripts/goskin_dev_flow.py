@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Fast GoSkin prepare flow over HTTP MCP (pauses before 开始蒙皮 by default)."""
+"""One-shot GoSkin prepare over HTTP MCP (stops before 开始蒙皮).
+
+With ``--scene``, uploads that local .max, loads it, then runs GoSkin.
+Do not call workspace_upload / load_scene / goskin_ensure_ready yourself.
+"""
 
 from __future__ import annotations
 
@@ -51,6 +55,24 @@ def _call_dict(session: McpHttpSession, name: str, arguments: dict[str, Any] | N
     return _as_dict(session.call_tool(name, arguments), tool=name)
 
 
+def _load_scene_text(session: McpHttpSession, local_path: str) -> str:
+    """load_scene returns a Max string, not an {ok,result} dict."""
+    raw = coerce_payload(session.call_tool("load_scene", {"file_path": local_path}))
+    if isinstance(raw, dict):
+        if raw.get("ok") is False:
+            raise McpHttpError(json.dumps(raw, ensure_ascii=False)[:800])
+        inner = raw.get("result", "")
+        text = inner if isinstance(inner, str) else json.dumps(raw, ensure_ascii=False)
+    else:
+        text = str(raw or "")
+    text = text.strip()
+    if text.upper().startswith("ERROR") or "file not found" in text.lower():
+        raise McpHttpError(f"load_scene failed: {text[:800]}")
+    if "Loaded scene" not in text:
+        raise McpHttpError(f"load_scene unexpected reply: {text[:800]}")
+    return text
+
+
 def _idle_online(instances: list) -> list[dict]:
     out = []
     for inst in instances:
@@ -71,6 +93,14 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     add_common_args(ap)
     ap.add_argument("--instance", default=None, help="Required when >1 idle online Max")
+    ap.add_argument(
+        "--scene",
+        default=None,
+        help=(
+            "Local .max on this machine. Script uploads it and load_scene(local_path) "
+            "before GoSkin. Omit only when that scene is already open in Max."
+        ),
+    )
     ap.add_argument("--mesh-names", default=None, help="Comma-separated mesh names")
     ap.add_argument("--bone-names", default=None, help="Comma-separated bone names")
     ap.add_argument(
@@ -140,6 +170,24 @@ def main() -> int:
             die(json.dumps(acq, ensure_ascii=False))
         acquired = True
         summary["acquired"] = acq
+
+        if args.scene:
+            src = Path(args.scene).expanduser()
+            if not src.is_file():
+                raise McpHttpError(f"scene file not found: {src}")
+            uploaded = session.upload_file_multipart(src)
+            local_path = str(uploaded.get("local_path") or "").strip()
+            if not local_path:
+                raise McpHttpError(
+                    "upload returned no local_path: "
+                    + json.dumps(uploaded, ensure_ascii=False)[:500]
+                )
+            summary["upload"] = {
+                "name": uploaded.get("name"),
+                "local_path": local_path,
+                "size": uploaded.get("size"),
+            }
+            summary["load_scene"] = _load_scene_text(session, local_path)
 
         # Minimized Max breaks OCR menu clicks; restore before GoSkin UI work.
         try:

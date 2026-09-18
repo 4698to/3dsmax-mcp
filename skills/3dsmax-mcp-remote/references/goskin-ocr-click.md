@@ -22,6 +22,7 @@ OCR / 实例表 / workspace 由 **MCP 服务器 B** 的运维配置；A 用 `che
 6. 用 OCR 计数（`模型：N` / `关节：N`）校验，不单信点击 `ok`。
 7. 场景选择为空时禁止「选定」。
 8. Max 所在桌面须 **未锁定**（锁屏 / RDP 断连 → 空成功点击）。
+9. 模拟点击前服务端会尝试关闭可见的 **MAXScript Listener**。不必为遮挡先手动关；关掉后点击仍是屏幕坐标，桌面须未锁定。
 
 ## 选择 Max 实例（第一步）
 
@@ -53,6 +54,25 @@ failed to open menu 'GoSkinning': no OCR line matched text='GoSkinning' with sco
 
 → 把 `menu`/`item` 换回默认，或按上表对照现场 UI 改正。
 
+## 打开场景：上传后用 `local_path`
+
+Agent 磁盘上的 `.max`，Max 读不到。场景还没打开时必须先上传。
+
+1. `workspace_upload`，或 `POST /files/upload`，或 `python upload_to_mcp.py <本机文件>`。
+2. 返回 JSON 含 `name`、`local_path`、`url`。
+3. `load_scene(file_path=local_path)`。`local_path` 是 Max 能 `doesFileExist` 的绝对路径。
+
+| 传给 `load_scene` | 结果 |
+|---|---|
+| `local_path` | 对 |
+| `url` | 错。只给 Agent HTTP 下载 |
+| `name` 或 `foo.max` | 错。只有文件名，报 file not found |
+| `C:\Users\...\foo.max` | 错。Agent 本机路径 |
+
+`save_as` 只认文件名。不要把这条用到 `load_scene`。场景已在 Max 里则跳过上传和加载。
+
+有本机 `.max` 时不要自己上传或 `load_scene`。只跑 `python goskin_dev_flow.py --url <mcp.json URL> --instance <name> --scene <本机.max>`。脚本在同一会话里上传、用 `local_path` 加载、再 `goskin_ensure_ready`。场景已打开则去掉 `--scene`。不要另写 `call('goskin_ensure_ready')`，也不要 `list_online_instances.py` 复查 busy。
+
 ## 标准工作流
 
 也可用一键准备（默认不点「开始蒙皮」）。**优先**用 IDE 已配置的 MCP 调 `goskin_*`；若跑脚本，`MAXMCP_URL`/`--url` 必须等于该 MCP 的 URL（**勿猜** `127.0.0.1`）：
@@ -72,6 +92,7 @@ python scripts/goskin_dev_flow.py --instance <name> --confirm-start
 Task Progress:
 - [ ] list_instances（空闲>1 则停下来让用户选）
 - [ ] acquire_instance(name=用户选定)
+- [ ] 场景不在 Max 里：上传 `.max`，再 `load_scene(file_path=local_path)`（不要传 `url` 或文件名）
 - [ ] check_dialog_ocr_health
 - [ ] goskin_ensure_ready(menu="自动蒙皮", item="GoSkinning")   # menu=顶栏, item=下拉项
 - [ ] get_unhidden_meshes_bones（或已知名时跳过）

@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse, urljoin
+from urllib.parse import quote, urlparse, urljoin
 from urllib.request import Request, urlopen
 
 
@@ -179,7 +179,9 @@ class McpHttpSession:
         return dest
 
     def download_file_name(self, file_name: str, dest: Path) -> Path:
-        url = urljoin(self.http_base + "/", f"files/{file_name}")
+        # http.client encodes the request line as ASCII. CJK names must be percent-encoded.
+        name = quote(Path(file_name).name, safe="")
+        url = urljoin(self.http_base + "/", f"files/{name}")
         return self.download_url(url, dest)
 
 

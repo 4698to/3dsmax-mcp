@@ -25,9 +25,10 @@
 
 Max 内部（`MCP_DialogMonitor.clickAtScreen`）：
 
-1. 对对话框执行 `SetForegroundWindow`
-2. `SetCursorPos(x, y)` — 物理屏幕像素
-3. `mouse_event(LEFTDOWN)` → sleep → `mouse_event(LEFTUP)`
+1. 若能看到 **MAXScript Listener** / **MAXScript 侦听器**，先尝试关掉（截图不受遮挡影响，真实鼠标会被它吃掉）
+2. 对对话框执行 `SetForegroundWindow`
+3. `SetCursorPos(x, y)` — 物理屏幕像素
+4. `mouse_event(LEFTDOWN)` → sleep → `mouse_event(LEFTUP)`
 
 坐标链路：对话框快照 → OCR 框 → `image_to_screen`（优先使用 **client rect**；当图像高度大于客户区高度且宽度一致时，减去顶部 padding——用外层窗口映射会点偏列表行）。
 

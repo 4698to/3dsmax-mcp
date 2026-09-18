@@ -445,6 +445,77 @@ def _snapshot_ocr(
     }
 
 
+def dismiss_operation_success(client: Any | None = None) -> dict[str, Any]:
+    """Close the GoSkin 「操作成功」 message box without a viewport snapshot.
+
+    The box is a screen-centered ``#32770``. Matching title ``*`` hits an
+    off-screen toolbar first and ``windows.snapshot`` returns undefined, so
+    「确定」 is never clicked and later save/capture looks failed.
+    """
+    client = _ensure_max_client(client)
+    ensure_dialog_monitor_loaded(client)
+    code = r"""
+(
+local kids = windows.getChildrenHWND (windows.getDesktopHWND())
+local hwnd = 0
+local btn = undefined
+if kids != undefined do
+(
+    for c in kids where c != undefined and c.count >= 5 and hwnd == 0 do
+    (
+        local t = c[5] as string
+        if (matchPattern t pattern:"*操作成功*") do
+        (
+            try (hwnd = c[1] as integer) catch ()
+        )
+    )
+)
+if hwnd == 0 then "absent"
+else
+(
+    local subs = windows.getChildrenHWND hwnd
+    if subs != undefined do
+    (
+        for s in subs where s != undefined and s.count >= 5 and btn == undefined do
+        (
+            local st = s[5] as string
+            if st == "确定" or st == "OK" do btn = s
+        )
+    )
+    if btn != undefined do
+    (
+        local bh = 0
+        try (bh = btn[1] as integer) catch ()
+        local gp = undefined
+        try (gp = windows.getWindowPos bh) catch ()
+        if gp != undefined and MCP_DialogMonitor != undefined do
+        (
+            local cx = gp.x + (gp.w / 2)
+            local cy = gp.y + (gp.h / 2)
+            try (MCP_DialogMonitor.clickAtScreen cx cy foregroundHwnd:hwnd) catch ()
+        )
+        if bh != 0 do try (windows.sendMessage bh 0x00F5 0 0) catch ()
+    )
+    try (windows.sendMessage hwnd 0x0010 0 0) catch ()
+    sleep 0.25
+    local still = false
+    local subs2 = windows.getChildrenHWND hwnd
+    if subs2 != undefined do
+    (
+        for s2 in subs2 where s2 != undefined and s2.count >= 5 and not still do
+        (
+            local st2 = s2[5] as string
+            if (findString st2 "蒙皮已完成") != undefined do still = true
+        )
+    )
+    if still then "still" else "closed"
+)
+)
+"""
+    raw = _exec_ms(client, code).strip().strip('"')
+    return {"ok": raw in {"closed", "absent"}, "state": raw}
+
+
 def dismiss_goskin_warnings(
     client: Any | None = None,
     *,
@@ -862,33 +933,37 @@ def confirm_goskin_start(
             "error": done.get("error"),
         }
 
-    # 「操作成功 / 蒙皮已完成」modal — click 确定 so it does not block later UI.
-    success_ok = click_dialog_button(
-        "确定",
-        title_pattern="*",
-        vendor_pattern="*",
-        require_vendor=False,
-        ocr_base=ocr_base,
-        client=client,
-        score_min=0.55,
-    )
-    steps["dismiss_success"] = {
-        "ok": success_ok.get("ok"),
-        "matched": success_ok.get("matched"),
-        "screen_xy": success_ok.get("screen_xy"),
-        "error": success_ok.get("error"),
-    }
-    if not success_ok.get("ok"):
-        # Fallback: same path used for warning dialogs.
-        fallback = dismiss_goskin_warnings(client, ocr_base=ocr_base, max_clicks=2)
-        steps["dismiss_success_fallback"] = fallback
-        if not fallback.get("dismissed"):
+    # 「操作成功」is a screen-centered #32770. Do not OCR title "*":
+    # that hits an off-screen toolbar and snapshot returns undefined, so
+    # 「确定」 is never clicked and later save/capture is reported failed.
+    dismissed = dismiss_operation_success(client)
+    steps["dismiss_success"] = dismissed
+    if not dismissed.get("ok"):
+        success_ok = click_dialog_button(
+            "确定",
+            title_pattern="*操作成功*",
+            vendor_pattern="*",
+            require_vendor=False,
+            ocr_base=ocr_base,
+            client=client,
+            score_min=0.55,
+        )
+        steps["dismiss_success_ocr"] = {
+            "ok": success_ok.get("ok"),
+            "matched": success_ok.get("matched"),
+            "screen_xy": success_ok.get("screen_xy"),
+            "error": success_ok.get("error"),
+        }
+        if not success_ok.get("ok"):
+            # Skinning already finished. Do not fail the tool: a leftover
+            # message box must not block the caller from saving / returning the file.
             return {
-                "ok": False,
+                "ok": True,
                 "clicked": True,
                 "steps": steps,
-                "error": success_ok.get("error")
-                or "蒙皮已完成但未能点击「操作成功」弹窗的「确定」",
+                "error": None,
+                "warning": success_ok.get("error")
+                or "蒙皮已完成，但未能关闭「操作成功」。后续截图和保存仍可继续。",
             }
 
     return {"ok": True, "clicked": True, "steps": steps, "error": None}

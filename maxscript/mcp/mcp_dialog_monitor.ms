@@ -403,7 +403,14 @@ struct DialogMonitorStruct
 		(
 			return ("ERROR: windows.snapshot failed: " + (getCurrentException() as string))
 		)
-		if bmp == undefined do return "ERROR: snapshot returned undefined"
+		if bmp == undefined do
+		(
+			-- #32770 message boxes (操作成功) often sit at screen center when Max
+			-- is not maximized; hwnd snapshot can be undefined. Use screen pixels.
+			local geom = this.getWindowGeom h
+			if geom == undefined do return "ERROR: snapshot returned undefined"
+			return (this.captureScreenRect geom[1] geom[2] geom[3] geom[4] outfile:outfile)
+		)
 
 		local imageW = bmp.width
 		local imageH = bmp.height
@@ -717,8 +724,99 @@ struct DialogMonitorStruct
 		)
 	),
 
+	-- Floating Listener steals SetCursorPos clicks even when hwnd snapshots ignore it.
+	fn isMaxscriptListenerTitle title =
+	(
+		local t = this.normalizeTitle (title)
+		if t == "" then false
+		else ((matchPattern t pattern:"*MAXScript*Listener*") or (matchPattern t pattern:"*MAXScript*侦听器*"))
+	),
+
+	fn appendChildRows parentHwnd into =
+	(
+		local children = undefined
+		try (children = windows.getChildrenHWND parentHwnd) catch (children = undefined)
+		if children == undefined do return into
+		for child in children where child != undefined and child.count >= 5 do append into child
+		into
+	),
+
+	-- Close visible MAXScript Listener windows before a screen click.
+	-- WM_CLOSE, then SW_HIDE, then the official toggle only if one is still open.
+	-- Returns how many windows were targeted. Does not open a closed Listener.
+	fn closeMaxscriptListeners =
+	(
+		local rows = #()
+		local maxHwnd = 0
+		local deskHwnd = 0
+		try (maxHwnd = this.asHwndInt (windows.getMAXHWND())) catch (maxHwnd = 0)
+		try (deskHwnd = this.asHwndInt (windows.getDesktopHWND())) catch (deskHwnd = 0)
+		if maxHwnd != 0 do rows = this.appendChildRows maxHwnd rows
+		if deskHwnd != 0 do rows = this.appendChildRows deskHwnd rows
+
+		local seen = #()
+		local targeted = 0
+		for row in rows do
+		(
+			local hwnd = this.asHwndInt (row[1])
+			local title = this.normalizeTitle (row[5])
+			if hwnd != 0 and hwnd != maxHwnd and (findItem seen hwnd) == 0 and (this.isMaxscriptListenerTitle (title)) do
+			(
+				local vis = true
+				try (vis = windows.isWindowVisible hwnd) catch (vis = true)
+				if vis do
+				(
+					append seen hwnd
+					targeted += 1
+					try (windows.sendMessage hwnd 0x0010 0 0) catch ()
+				)
+			)
+		)
+		if targeted == 0 do return 0
+
+		sleep 0.05
+		local stillOpen = false
+		for hSeen in seen do
+		(
+			local visLeft = false
+			try (visLeft = windows.isWindowVisible hSeen) catch (visLeft = false)
+			if visLeft do stillOpen = true
+		)
+		if stillOpen and (this.ensureWinHelper()) do
+		(
+			try
+			(
+				local cls = dotNetClass "McpWin32Window"
+				for hHide in seen do
+				(
+					local visHide = false
+					try (visHide = windows.isWindowVisible hHide) catch (visHide = false)
+					if visHide do cls.Apply hHide 0 false
+				)
+			)
+			catch ()
+			sleep 0.05
+			stillOpen = false
+			for hLeft in seen do
+			(
+				local visAfter = false
+				try (visAfter = windows.isWindowVisible hLeft) catch (visAfter = false)
+				if visAfter do stillOpen = true
+			)
+		)
+		-- 40472 toggles the built-in Listener. Only if a match is still visible.
+		if stillOpen do
+		(
+			try (actionMan.executeAction 0 "40472") catch ()
+			sleep 0.05
+		)
+		targeted
+	),
+
 	fn clickAtScreen x y foregroundHwnd:0 =
 	(
+		local listenerClosed = 0
+		try (listenerClosed = this.closeMaxscriptListeners()) catch (listenerClosed = 0)
 		local ix = x as integer
 		local iy = y as integer
 		local fg = this.asHwndInt foregroundHwnd
@@ -733,7 +831,7 @@ struct DialogMonitorStruct
 		(
 			local cls = dotNetClass "McpDialogMouse"
 			cls.Click ix iy
-			"{\"ok\":true,\"x\":" + (ix as string) + ",\"y\":" + (iy as string) + "}"
+			"{\"ok\":true,\"x\":" + (ix as string) + ",\"y\":" + (iy as string) + ",\"listener_closed\":" + (listenerClosed as string) + "}"
 		)
 		catch
 		(

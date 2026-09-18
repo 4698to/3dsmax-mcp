@@ -45,3 +45,13 @@ Each `python …/goskin_dev_flow.py` starts a **new** MCP HTTP session. Leases a
 | New python process after a stuck keep-lease | Sees `busy` / `no idle online` — cannot steal the old session’s lock |
 
 Do **not** use `--keep-lease` unless a follow-up call in the **same** long-lived MCP session will continue (IDE tool loop). For one-shot CLI scripts, omit it.
+
+## GoSkin is one script
+
+Do not `load_scene` in the IDE and then start `goskin_dev_flow.py`. Pass the file in:
+
+```bash
+python goskin_dev_flow.py --url <mcp.json URL> --instance <name> --scene <local.max>
+```
+
+That process uploads, loads `local_path`, and runs GoSkin in one session. Omit `--scene` only when the scene is already open. If this chat already holds the lease, `release_instance` first (does not unload), then run the script once. Do not write a second `call('goskin_ensure_ready')` and do not re-check busy with `list_online_instances.py`.
