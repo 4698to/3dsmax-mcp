@@ -32,7 +32,7 @@ If `MAXMCP_URL` / `--url` is missing, scripts **exit with an error** instead of 
 | `list_online_instances.py` | `list_instances` (online filter) |
 | `capture_viewport_shot.py` | Optional `acquire_instance` → `capture_viewport` → download → `release_instance`. **If the target is busy, pass `--no-acquire`** — do not wait in the lease queue just for a screenshot (see [instance-locks.md](../instance-locks.md)). |
 | `upload_to_mcp.py` | `POST /files/upload` (or `--via-mcp` → `workspace_upload`) |
-| `goskin_dev_flow.py` | OCR health → acquire → unhidden → `propose_skin_bones` (if registered) → `goskin_ensure_ready` → `goskin_run_skin` (no start unless `--confirm-start`). **`--keep-lease` only on success**; OCR/tool failure always releases. A new python process is a new MCP session and cannot reclaim a prior keep-lease (see [instance-locks.md](../instance-locks.md)). |
+| `goskin_dev_flow.py` | OCR health → acquire → `restore_max_window` → unhidden → `propose_skin_bones` (if registered) → `goskin_ensure_ready` → `goskin_run_skin` (no start unless `--confirm-start`). **`--keep-lease` only on success**; OCR/tool failure always releases. A new python process is a new MCP session and cannot reclaim a prior keep-lease (see [instance-locks.md](../instance-locks.md)). |
 
 ```bash
 # Screenshot while another agent holds Max (no queue):

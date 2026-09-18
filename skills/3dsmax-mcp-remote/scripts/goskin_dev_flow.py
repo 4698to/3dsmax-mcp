@@ -26,7 +26,10 @@ def _as_dict(raw: Any, *, tool: str = "") -> dict[str, Any]:
     data = coerce_payload(raw)
     if isinstance(data, dict) and "ok" in data:
         if not data.get("ok"):
-            raise McpHttpError(json.dumps(data, ensure_ascii=False)[:1200])
+            payload = dict(data)
+            if tool:
+                payload.setdefault("failed_tool", tool)
+            raise McpHttpError(json.dumps(payload, ensure_ascii=False)[:1600])
         inner = data.get("result", data)
         if isinstance(inner, str):
             inner = coerce_payload(inner)
@@ -138,6 +141,23 @@ def main() -> int:
         acquired = True
         summary["acquired"] = acq
 
+        # Minimized Max breaks OCR menu clicks; restore before GoSkin UI work.
+        try:
+            restored = _call_dict(
+                session, "restore_max_window", {"restore_mode": "restore"}
+            )
+            summary["restore_max_window"] = {
+                k: restored.get(k)
+                for k in ("ok", "was_minimized", "iconic", "foreground", "error")
+                if k in restored
+            } or restored
+        except McpHttpError as exc:
+            summary["restore_max_window"] = {
+                "ok": False,
+                "skipped": True,
+                "error": str(exc)[:400],
+            }
+
         unhidden = _call_dict(session, "get_unhidden_meshes_bones")
         summary["unhidden"] = {
             "meshes": unhidden.get("meshes") or unhidden.get("mesh_names"),
@@ -183,12 +203,21 @@ def main() -> int:
                     run_args["bone_handles"] = bh
             except McpHttpError as exc:
                 msg = str(exc)
-                if "Unknown tool" in msg and "propose_skin_bones" in msg:
+                soft = (
+                    ("Unknown tool" in msg and "propose_skin_bones" in msg)
+                    or ("Empty response from 3ds Max" in msg)
+                    or ("did not respond within" in msg)
+                )
+                if soft:
                     summary["propose_skin_bones"] = {
                         "ok": False,
                         "skipped": True,
                         "error": msg,
-                        "hint": "Restart maxmcp so MCP tool propose_skin_bones is registered",
+                        "hint": (
+                            "propose_skin_bones failed (tool missing, Max empty reply, or timeout); "
+                            "using unhidden bones_handle. If Empty response repeats, check Max Listener "
+                            "/ reload skin_Manage.ms; heavy RayMeshGrid can stall the bridge."
+                        ),
                     }
                     if bh:
                         run_args["bone_handles"] = bh
@@ -222,6 +251,12 @@ def main() -> int:
         return 0
     except McpHttpError as exc:
         summary["error"] = str(exc)
+        try:
+            err_obj = json.loads(str(exc))
+            if isinstance(err_obj, dict) and err_obj.get("failed_tool"):
+                summary["failed_tool"] = err_obj.get("failed_tool")
+        except (json.JSONDecodeError, TypeError):
+            pass
         summary["lease_note"] = (
             "failure releases the lease even with --keep-lease "
             "(keep-lease applies only after a successful prepare)"
