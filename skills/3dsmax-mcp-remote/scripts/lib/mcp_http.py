@@ -114,6 +114,36 @@ class McpHttpSession:
         self._post_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"})
         self._initialized = True
 
+    def list_tools(self, *, raw: bool = False) -> list[dict[str, Any]]:
+        """Standard tools/list. Returns [{name, description, inputSchema}, ...].
+
+        Paginates over nextCursor if the server returns one. Pass raw=True to
+        get the full JSON-RPC result dict ({tools, nextCursor}) instead.
+        """
+        self.ensure_initialized()
+        cursor: str | None = None
+        tools: list[dict[str, Any]] = []
+        while True:
+            params: dict[str, Any] = {}
+            if cursor:
+                params["cursor"] = cursor
+            obj = self._post_rpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": self._alloc_id(),
+                    "method": "tools/list",
+                    "params": params,
+                }
+            )
+            if obj is None or "error" in obj:
+                raise McpHttpError(f"tools/list failed: {obj}")
+            result = obj.get("result") or {}
+            tools.extend(result.get("tools") or [])
+            cursor = result.get("nextCursor")
+            if not cursor:
+                break
+        return tools if not raw else result
+
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
         self.ensure_initialized()
         obj = self._post_rpc(

@@ -14,7 +14,7 @@ from ..max_client import MaxClient
 
 _previous_snapshot: dict | None = None
 
-VALID_ACTIONS = frozenset({"overview", "filter", "class", "property", "selection", "delta"})
+VALID_ACTIONS = frozenset({"overview", "filter", "class", "property", "selection", "delta", "unhidden_objects"})
 
 
 def normalize_action(action: str) -> str:
@@ -55,6 +55,8 @@ def dispatch_query_scene(client: MaxClient, action: str, **params: object) -> st
             property_value=str(params.get("property_value", "") or ""),
             class_filter=str(params.get("class_filter", "") or ""),
         )
+    if act == "unhidden_objects":
+        return run_unhidden_objects(client)
     if act == "selection":
         return run_selection(
             client,
@@ -126,10 +128,37 @@ def run_filter(
         response = client.send_command(_filter_summary_maxscript())
         return response.get("result", "{}")
 
-    response = client.send_command(
-        _filter_list_maxscript(class_name, pattern, layer, roots_only, limit, offset)
-    )
+    try:
+        response = client.send_command(
+            _filter_list_maxscript(class_name, pattern, layer, roots_only, limit, offset)
+        )
+    except RuntimeError as exc:
+        return json.dumps({
+            "error": "MCP_SceneManage.filterObjects() failed — 3ds Max MCP server is incomplete (mcp_SceneManage.ms not loaded)",
+            "detail": str(exc),
+        })
     return response.get("result", '{"totalMatched":0,"objects":[]}')
+
+
+def run_unhidden_objects(client: MaxClient) -> str:
+    """List every unhidden scene node grouped by MAXScript class.
+
+    Delegates to the Max-side struct method ``MCP_SceneManage.getSceneUnhiddenObjects()``
+    (defined in maxscript/mcp/mcp_SceneManage.ms). It walks ``objects where not isHidden``,
+    groups node names by ``(classOf o) as string`` (first-seen order), and returns::
+
+        {"type_count": 2, "total": 5,
+         "types": {"Editable_Mesh": {"count": 3, "objects": ["Box01", ...]},
+                   "Biped_Object": {"count": 2, "objects": ["Bip01", ...]}}}
+    """
+    try:
+        response = client.send_command("MCP_SceneManage.getSceneUnhiddenObjects()")
+    except RuntimeError as exc:
+        return json.dumps({
+            "error": "MCP_SceneManage.getSceneUnhiddenObjects() failed — 3ds Max MCP server is incomplete (mcp_SceneManage.ms not loaded)",
+            "detail": str(exc),
+        })
+    return response.get("result", "{}")
 
 
 def run_selection(client: MaxClient, detail: str = "full", max_items: int = 50) -> str:
@@ -141,7 +170,16 @@ def run_selection(client: MaxClient, detail: str = "full", max_items: int = 50) 
                 return response.get("result", "[]")
             except RuntimeError:
                 pass
-        response = client.send_command(_selection_compact_maxscript())
+        # MCP_SceneManage is loaded by mcp_autostart.ms; if it is missing the
+        # Max-side MCP scripts are incomplete — surface that instead of silently
+        # falling back to an inline copy of the logic.
+        try:
+            response = client.send_command(_selection_compact_maxscript())
+        except RuntimeError as exc:
+            return json.dumps({
+                "error": "MCP_SceneManage.getSelectionCompact() failed — 3ds Max MCP server is incomplete (mcp_SceneManage.ms not loaded)",
+                "detail": str(exc),
+            })
         return response.get("result", "[]")
 
     if client.native_available:
@@ -157,7 +195,15 @@ def run_selection(client: MaxClient, detail: str = "full", max_items: int = 50) 
         except RuntimeError:
             pass
 
-    response = client.send_command(_selection_full_maxscript(max_items))
+    # MCP_SceneManage is loaded by mcp_autostart.ms; if it is missing the
+    # Max-side MCP scripts are incomplete — surface that to the user.
+    try:
+        response = client.send_command(_selection_full_maxscript(max_items))
+    except RuntimeError as exc:
+        return json.dumps({
+            "error": "MCP_SceneManage.getSelectionFull() failed — 3ds Max MCP server is incomplete (mcp_SceneManage.ms not loaded)",
+            "detail": str(exc),
+        })
     return response.get("result", "{}")
 
 
@@ -426,167 +472,115 @@ def _filter_list_maxscript(
     limit: int,
     offset: int,
 ) -> str:
-    conditions = []
-    if class_name:
-        conditions.append(f'((classOf obj) as string) == "{class_name.replace(chr(34), "")}"')
-    if pattern:
-        safe_pattern = pattern.replace('"', "").replace("\\", "\\\\")
-        conditions.append(f'matchPattern obj.name pattern:"{safe_pattern}"')
-    if layer:
-        conditions.append(f'obj.layer.name == "{layer.replace(chr(34), "")}"')
-    if roots_only:
-        conditions.append("obj.parent == undefined")
-    filter_expr = " and ".join(conditions) if conditions else "true"
+    """MAXScript call that lists scene nodes filtered by class/name/layer.
+
+    Delegates to the Max-side struct method ``MCP_SceneManage.filterObjects``
+    (defined in maxscript/mcp/mcp_SceneManage.ms). It scans the whole scene
+    (``objects``) applying, in order:
+
+    - class_name: exact match on ``(classOf obj) as string``
+    - pattern:    ``matchPattern obj.name pattern:<pattern>``
+    - layer:      exact match on ``obj.layer.name``
+    - roots_only: keep only nodes with ``obj.parent == undefined``
+
+    then pages results with ``offset``/``limit`` and emits per node:
+    name/class/position/parent/numChildren/isHidden/isFrozen/layer. The
+    position uses point3ToJson with a safe fallback for ``Biped_Object``.
+
+    Returns a JSON object string::
+
+        {"totalMatched": 2, "objects": [{"name": "...", "class": "...",
+         "position": [0,1,2], "parent": null, "numChildren": 0,
+         "isHidden": false, "isFrozen": false, "layer": "Layer0"}]}
+    """
+
+    def _ms_str(s: str) -> str:
+        # Escape for a double-quoted MAXScript string literal.
+        return s.replace("\\", "\\\\").replace('"', '\\"')
 
     return (
-        "(\n"
-        "    local esc = MCP_Server.escapeJsonString\n"
-        "    local matched = #()\n"
-        f"    for obj in objects where ({filter_expr}) do append matched obj\n"
-        "    local totalMatched = matched.count\n"
-        f"    local startIdx = {offset + 1}\n"
-        f"    local endIdx = amin #(matched.count, {offset + limit})\n"
-        "    local arr = #()\n"
-        "    for i = startIdx to endIdx do (\n"
-        "        local obj = matched[i]\n"
-        "        local posStr = \"[\" + (obj.pos.x as string) + \",\" + \\\n"
-        "                       (obj.pos.y as string) + \",\" + \\\n"
-        "                       (obj.pos.z as string) + \"]\"\n"
-        '        local parentName = if obj.parent != undefined then obj.parent.name else ""\n'
-        '        local parentField = if parentName == "" then "null" else ("\\"" + (esc parentName) + "\\"") \n'
-        "        local entry = \"{\" + \\\n"
-        '            "\\"name\\":\\"" + (esc obj.name) + "\\"," + \\\n'
-        '            "\\"class\\":\\"" + (esc ((classOf obj) as string)) + "\\"," + \\\n'
-        '            "\\"position\\":" + posStr + "," + \\\n'
-        '            "\\"parent\\":" + parentField + "," + \\\n'
-        '            "\\"numChildren\\":" + (obj.children.count as string) + "," + \\\n'
-        '            "\\"isHidden\\":" + (if obj.isHidden then "true" else "false") + "," + \\\n'
-        '            "\\"isFrozen\\":" + (if obj.isFrozen then "true" else "false") + "," + \\\n'
-        '            "\\"layer\\":\\"" + (esc obj.layer.name) + "\\"" + \\\n'
-        '        "}"\n'
-        "        append arr entry\n"
-        "    )\n"
-        '    local result = "{\\"totalMatched\\":" + (totalMatched as string) + ",\\"objects\\":["\n'
-        "    for i = 1 to arr.count do (\n"
-        "        if i > 1 do result += \",\"\n"
-        "        result += arr[i]\n"
-        "    )\n"
-        '    result += "]}"\n'
-        "    result\n"
-        ")\n"
+        "MCP_SceneManage.filterObjects "
+        f'class_name:"{_ms_str(class_name)}" '
+        f'pattern:"{_ms_str(pattern)}" '
+        f'layer:"{_ms_str(layer)}" '
+        f"roots_only:{'true' if roots_only else 'false'} "
+        f"limit:{int(limit)} offset:{int(offset)}"
     )
 
 
 def _selection_compact_maxscript() -> str:
-    return r"""(
-        local arr = #()
-        for obj in selection do (
-            local posStr = "[" + (obj.pos.x as string) + "," + \
-                           (obj.pos.y as string) + "," + \
-                           (obj.pos.z as string) + "]"
-            local colorStr = "[" + (obj.wirecolor.r as string) + "," + \
-                             (obj.wirecolor.g as string) + "," + \
-                             (obj.wirecolor.b as string) + "]"
-            local entry = "{" + \
-                "\"name\":\"" + obj.name + "\"," + \
-                "\"class\":\"" + ((classOf obj) as string) + "\"," + \
-                "\"position\":" + posStr + "," + \
-                "\"wirecolor\":" + colorStr + \
-            "}"
-            append arr entry
-        )
-        local result = "["
-        for i = 1 to arr.count do (
-            if i > 1 do result += ","
-            result += arr[i]
-        )
-        result += "]"
-        result
-    )"""
+    """MAXScript call that dumps the current scene selection as a compact JSON array.
+
+    Delegates to the Max-side struct method ``MCP_SceneManage.getSelectionCompact()``
+    (defined in maxscript/mcp/mcp_SceneManage.ms). For every node currently in the
+    scene selection (``selection``) it reads:
+
+    - name:      node name (``obj.name``)
+    - class:     MAXScript class name (``classOf obj``)
+    - position:  world-space position [x, y, z] (``obj.pos``; falls back to
+                 ``obj.position`` / [0,0,0] for nodes such as ``Biped_Object``
+                 that do not expose a ``.pos`` property)
+    - wirecolor: wireframe color [r, g, b] (``obj.wirecolor``)
+
+    Returns a JSON array string, e.g.::
+
+        [{"name":"Box01","class":"Editable_Mesh","position":[0,1,2],"wirecolor":[128,128,128]}]
+    """
+    return "MCP_SceneManage.getSelectionCompact()"
 
 
 def _selection_full_maxscript(max_items: int) -> str:
-    return (
-        r"""(
-        local esc = MCP_Server.escapeJsonString
-        local arr = ""
-        local count = 0
-        local cap = """
-        + str(max_items)
-        + r"""
-        local total = selection.count
+    """MAXScript call that dumps the current scene selection as a full JSON object.
 
-        for obj in selection while count < cap do (
-            if count > 0 do arr += ","
-            count += 1
+    Delegates to the Max-side struct method ``MCP_SceneManage.getSelectionFull max_items:``
+    (defined in maxscript/mcp/mcp_SceneManage.ms). For up to ``max_items`` nodes
+    currently in the scene selection (``selection``) it reads:
 
-            local posStr = "[" + (obj.pos.x as string) + "," + \
-                           (obj.pos.y as string) + "," + \
-                           (obj.pos.z as string) + "]"
+    - name:      node name (``obj.name``)
+    - class:     MAXScript class name (``classOf obj``)
+    - parent:    parent node name, or null for roots (``obj.parent.name``)
+    - material:  material name, or null when unassigned (``obj.material.name``)
+    - modifiers: class names of all modifiers (``obj.modifiers``)
+    - pos:       world-space position [x, y, z] (``obj.pos``; falls back to
+                 ``obj.position`` / [0,0,0] for nodes such as ``Biped_Object``
+                 that do not expose a ``.pos`` property)
+    - bbox:      world-space bounding box [[minX,minY,minZ],[maxX,maxY,maxZ]]
+                 (``nodeGetBoundingBox obj (matrix3 1)``)
 
-            local matField = if obj.material != undefined \
-                then ("\"" + (esc obj.material.name) + "\"") else "null"
+    Returns a JSON object string::
 
-            local parentField = if obj.parent != undefined \
-                then ("\"" + (esc obj.parent.name) + "\"") else "null"
-
-            local modArr = ""
-            for m = 1 to obj.modifiers.count do (
-                if m > 1 do modArr += ","
-                modArr += "\"" + (esc ((classOf obj.modifiers[m]) as string)) + "\""
-            )
-
-            local bboxStr = "null"
-            try (
-                local bb = nodeGetBoundingBox obj (matrix3 1)
-                local bbMin = bb[1]
-                local bbMax = bb[2]
-                bboxStr = "[[" + (bbMin.x as string) + "," + (bbMin.y as string) + "," + \
-                           (bbMin.z as string) + "],[" + (bbMax.x as string) + "," + \
-                           (bbMax.y as string) + "," + (bbMax.z as string) + "]]"
-            ) catch ()
-
-            arr += "{\"name\":\"" + (esc obj.name) + "\"" + \
-                   ",\"class\":\"" + (esc ((classOf obj) as string)) + "\"" + \
-                   ",\"parent\":" + parentField + \
-                   ",\"material\":" + matField + \
-                   ",\"modifiers\":[" + modArr + "]" + \
-                   ",\"pos\":" + posStr + \
-                   ",\"bbox\":" + bboxStr + "}"
-        )
-        "{\"selected\":" + (total as string) + ",\"objects\":[" + arr + "]}"
-    )"""
-    )
+        {"selected": 2, "objects": [{"name": "...", "class": "...", "parent": null,
+         "material": null, "modifiers": [...], "pos": [0,1,2], "bbox": [[..],[..]]}]}
+    """
+    return f"MCP_SceneManage.getSelectionFull max_items:{int(max_items)}"
 
 
 def _capture_scene_state(client: MaxClient) -> dict:
-    maxscript = r"""(
-        local esc = MCP_Server.escapeJsonString
-        local result = ""
-        local count = 0
-        for obj in objects do (
-            if count > 0 do result += ","
-            count += 1
-            local posStr = "[" + (obj.pos.x as string) + "," + \
-                           (obj.pos.y as string) + "," + \
-                           (obj.pos.z as string) + "]"
-            local matName = if obj.material != undefined then (esc obj.material.name) else ""
-            local cn = esc ((classOf obj) as string)
-            local hidden = if obj.isHidden then "true" else "false"
-            -- Key by node handle, not name: Max names aren't unique, and a name key
-            -- would collapse duplicate-named nodes into one entry (last wins).
-            local hkey = (getHandleByAnim obj) as string
-            result += "\"" + hkey + "\":{" + \
-                "\"name\":\"" + (esc obj.name) + "\"," + \
-                "\"c\":\"" + cn + "\"," + \
-                "\"p\":" + posStr + "," + \
-                "\"m\":\"" + matName + "\"," + \
-                "\"n\":" + (obj.modifiers.count as string) + "," + \
-                "\"h\":" + hidden + "}"
-        )
-        "{" + result + "}"
-    )"""
-    response = client.send_command(maxscript)
+    """Capture a JSON map of every scene node keyed by AnimHandle, for delta diffing.
+
+    Delegates to the Max-side struct method ``MCP_SceneManage.captureSceneState()``
+    (defined in maxscript/mcp/mcp_SceneManage.ms). For every node in the scene
+    (``objects``) it reads:
+
+    - name:  node name (``obj.name``)
+    - c:     MAXScript class name (``classOf obj``)
+    - p:     world-space position [x, y, z] (``obj.pos``; falls back to
+             ``obj.position`` / [0,0,0] for nodes such as ``Biped_Object``)
+    - m:     material name, "" when unassigned (``obj.material.name``)
+    - n:     modifier count (``obj.modifiers.count``)
+    - h:     hidden flag (``obj.isHidden``)
+
+    Returns a dict keyed by node AnimHandle, e.g.::
+
+        {"12345": {"name": "Box01", "c": "Editable_Mesh", "p": [0,1,2],
+                   "m": "", "n": 0, "h": false}}
+    """
+    try:
+        response = client.send_command("MCP_SceneManage.captureSceneState()")
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "MCP_SceneManage.captureSceneState() failed — 3ds Max MCP server is incomplete (mcp_SceneManage.ms not loaded)"
+        ) from exc
     return json.loads(response.get("result", "{}"))
 
 

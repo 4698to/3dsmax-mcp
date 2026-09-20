@@ -28,8 +28,10 @@ Typical split — **Agent (A) / MCP server (B) / Max (C)**:
 
 ## Tool Profile Routing
 
-- **Full/core:** Operational tools such as `query_scene` and `create_object` are advertised directly; call the matching tool by name.
+- **Verify before you route.** Check the actual `tools/list` surface first; never assume a profile from docs alone.
+- **Full/core (current):** Operational tools are advertised directly, and the discovery meta-tools `list_toolsets` / `describe_toolset` / `call_tool` are also registered. Prefer calling operational tools by name; use `list_toolsets` only to browse capability groups or verify a tool exists. Never call `list_toolsets` if it is not in `tools/list`.
 - **Progressive:** If the advertised surface contains only `list_toolsets`, `describe_toolset`, and `call_tool`, never call an operational name as a top-level MCP tool. Choose the relevant capability with `list_toolsets`, load only that group with `describe_toolset`, then invoke the selected operation through `call_tool(name=..., arguments=...)`.
+- **On "Unknown tool":** Re-pull `tools/list` and pick from the real surface. Do not keep guessing tool names.
 - Do not describe every toolset up front. Load only the group needed for the current request; if the exact operational tool and arguments are already known, `call_tool` can dispatch it directly.
 
 Principles:

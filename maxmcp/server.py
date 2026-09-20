@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from .max_client import MaxClient
-from .tool_discovery import register_progressive_tools
+from .tool_discovery import TOOLSET_SPECS, ToolsetSpec, register_progressive_tools
 from .tool_response import make_structured_tool
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -435,9 +435,16 @@ def _tool_profile() -> str:
     return "full"
 
 
+def _toolset_specs_for(modules: list[str]) -> tuple[ToolsetSpec, ...]:
+    """Keep only the toolset specs fully covered by the given modules."""
+    allowed = set(modules)
+    return tuple(spec for spec in TOOLSET_SPECS if set(spec.modules) <= allowed)
+
+
 def _register_tool_modules() -> None:
     import_module(".tools.routing", package=__package__)
-    if _tool_profile() == "progressive":
+    profile = _tool_profile()
+    if profile == "progressive":
         register_progressive_tools(
             public_mcp=mcp,
             hidden_mcp=_progressive_mcp,
@@ -446,14 +453,30 @@ def _register_tool_modules() -> None:
             allowed_modules=CORE_TOOL_MODULES + SPECIALTY_TOOL_MODULES,
             before_call=client.clear_last_response,
             transport_provider=client.get_last_transport,
+            profile=profile,
         )
         return
 
     modules = list(CORE_TOOL_MODULES)
-    if _tool_profile() == "full":
+    if profile == "full":
         modules.extend(SPECIALTY_TOOL_MODULES)
     for name in modules:
         import_module(f".tools.{name}", package=__package__)
+
+    # Every profile also registers the discovery meta-tools so agents that
+    # follow the progressive-style guidance (list_toolsets first) never hit
+    # "Unknown tool" against a full/core server.
+    register_progressive_tools(
+        public_mcp=mcp,
+        hidden_mcp=mcp,
+        package=__package__,
+        tools_dir=Path(__file__).resolve().parent / "tools",
+        allowed_modules=modules,
+        toolsets=_toolset_specs_for(modules),
+        before_call=client.clear_last_response,
+        transport_provider=client.get_last_transport,
+        profile=profile,
+    )
 
 
 # Import tool modules to trigger @mcp.tool() registration. Default is full;
@@ -511,6 +534,12 @@ def max_assistant() -> str:
             "Use list_toolsets to choose a capability group, describe_toolset to load its exact "
             "schemas, then invoke the selected operational tool through call_tool. Never call a "
             "hidden operational name as a top-level MCP tool.\n"
+        )
+    elif _tool_profile() in {"full", "core"}:
+        scene_call_rule += (
+            "The discovery meta-tools list_toolsets / describe_toolset / call_tool are also "
+            "registered, but operational tools are advertised directly — prefer calling them by "
+            "name; use list_toolsets only to browse capability groups or verify a tool exists.\n"
         )
     base_rules = (
         "You are a 3ds Max assistant connected via MCP.\n"

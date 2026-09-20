@@ -1,6 +1,8 @@
-"""Unified scene query tool — one MCP entry for overview, filter, class, property, selection, delta."""
+"""Unified scene query tool — one MCP entry for overview, filter, class, property, selection, delta, unhidden_objects."""
 
 from __future__ import annotations
+
+from typing import Literal
 
 from ..server import mcp, client
 from ._query_scene_core import dispatch_query_scene
@@ -8,7 +10,15 @@ from ._query_scene_core import dispatch_query_scene
 
 @mcp.tool()
 def query_scene(
-    action: str,
+    action: Literal[
+        "overview",
+        "filter",
+        "class",
+        "property",
+        "selection",
+        "delta",
+        "unhidden_objects",
+    ],
     class_name: str = "",
     pattern: str = "",
     layer: str = "",
@@ -26,7 +36,7 @@ def query_scene(
     capture: bool = False,
     unchanged_since: int = 0,
 ) -> str:
-    """Unified scene query. action: overview | filter | class | property | selection | delta.
+    """Unified scene query. action: overview | filter | class | property | selection | delta | unhidden_objects.
 
     Use when: reading scene state, finding nodes, checking selection, or verifying edits (delta).
     Not when: deep single-object dumps (inspect_object), bridge diagnosis (get_bridge_status),
@@ -38,6 +48,7 @@ def query_scene(
     property — find objects by property (property_name, property_value, class_filter)
     selection — current selection (detail=compact|full, max_items)
     delta — changes since last baseline (capture=true to reset; unchanged_since=N for cheap journal no-op)
+    unhidden_objects — every unhidden node grouped by MAXScript class (count + names per type)
     """
     return dispatch_query_scene(
         client,

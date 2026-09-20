@@ -366,6 +366,163 @@ struct SceneManageStruct
 			"\"polyCount\":" + (polyCount as string) + \
 		"}"
 	),
+
+	-- Compact JSON array of the current selection: name/class/position/wirecolor.
+	-- (Migrated from maxmcp/tools/_query_scene_core.py _selection_compact_maxscript)
+	fn getSelectionCompact =
+	(
+		local arr = #()
+		for obj in selection do (
+			-- Biped_Object / helper nodes may not expose .pos; fall back safely.
+			local p = [0, 0, 0]
+			try (p = obj.transform.position) catch (try (p = obj.transform.position) catch (p = [0, 0, 0]))
+			local posStr = this.point3ToJson p
+			local colorStr = this.point3ToJson obj.wirecolor
+			local entry = "{" + \
+				"\"name\":\"" + obj.name + "\"," + \
+				"\"class\":\"" + ((classOf obj) as string) + "\"," + \
+				"\"position\":" + posStr + "," + \
+				"\"wirecolor\":" + colorStr + \
+			"}"
+			append arr entry
+		)
+		local result = "["
+		for i = 1 to arr.count do (
+			if i > 1 do result += ","
+			result += arr[i]
+		)
+		result += "]"
+		result
+	),
+
+	-- Full JSON dump of the current selection, capped at max_items entries:
+	-- name/class/parent/material/modifiers/pos/bbox per selected node.
+	-- (Migrated from maxmcp/tools/_query_scene_core.py _selection_full_maxscript)
+	fn getSelectionFull max_items:50 =
+	(
+		local esc = MCP_Server.escapeJsonString
+		local arr = ""
+		local count = 0
+		local cap = max_items
+		local total = selection.count
+
+		for obj in selection while count < cap do (
+			if count > 0 do arr += ","
+			count += 1
+
+			-- Biped_Object / helper nodes may not expose .pos; fall back safely.
+			local p = [0, 0, 0]
+			try (p = obj.transform.pos) catch (try (p = obj.transform.position) catch (p = [0, 0, 0]))
+			local posStr = this.point3ToJson p
+
+			local matField = if obj.material != undefined \
+				then ("\"" + (esc obj.material.name) + "\"") else "null"
+
+			local parentField = if obj.parent != undefined \
+				then ("\"" + (esc obj.parent.name) + "\"") else "null"
+
+			local modArr = ""
+			for m = 1 to obj.modifiers.count do (
+				if m > 1 do modArr += ","
+				modArr += "\"" + (esc ((classOf obj.modifiers[m]) as string)) + "\""
+			)
+
+			local bboxStr = "null"
+			try (
+				local bb = nodeGetBoundingBox obj (matrix3 1)
+				bboxStr = "[" + this.point3ToJson bb[1] + "," + this.point3ToJson bb[2] + "]"
+			) catch ()
+
+			arr += "{\"name\":\"" + (esc obj.name) + "\"" + \
+			       ",\"class\":\"" + (esc ((classOf obj) as string)) + "\"" + \
+			       ",\"parent\":" + parentField + \
+			       ",\"material\":" + matField + \
+			       ",\"modifiers\":[" + modArr + "]" + \
+			       ",\"pos\":" + posStr + \
+			       ",\"bbox\":" + bboxStr + "}"
+		)
+		"{\"selected\":" + (total as string) + ",\"objects\":[" + arr + "]}"
+	),
+
+	-- JSON map of every scene node keyed by AnimHandle, for scene-delta diffing:
+	-- name/class/position/material/modifierCount/hidden per node.
+	-- (Migrated from maxmcp/tools/_query_scene_core.py _capture_scene_state)
+	fn captureSceneState =
+	(
+		local esc = MCP_Server.escapeJsonString
+		local result = ""
+		local count = 0
+		for obj in objects do (
+			if count > 0 do result += ","
+			count += 1
+			-- Biped_Object / helper nodes may not expose .pos; fall back safely.
+			local p = [0, 0, 0]
+			try (p = obj.transform.pos) catch (try (p = obj.transform.position) catch (p = [0, 0, 0]))
+			local posStr = this.point3ToJson p
+			local matName = if obj.material != undefined then (esc obj.material.name) else ""
+			local cn = esc ((classOf obj) as string)
+			local hidden = if obj.isHidden then "true" else "false"
+			-- Key by node handle, not name: Max names aren't unique, and a name key
+			-- would collapse duplicate-named nodes into one entry (last wins).
+			local hkey = (getHandleByAnim obj) as string
+			result += "\"" + hkey + "\":{" + \
+				"\"name\":\"" + (esc obj.name) + "\"," + \
+				"\"c\":\"" + cn + "\"," + \
+				"\"p\":" + posStr + "," + \
+				"\"m\":\"" + matName + "\"," + \
+				"\"n\":" + (obj.modifiers.count as string) + "," + \
+				"\"h\":" + hidden + "}"
+		)
+		"{" + result + "}"
+	),
+
+	-- Filter the whole scene (objects) by class/name pattern/layer/roots_only,
+	-- apply limit+offset paging, and return a JSON object with totalMatched and
+	-- per-node details: name/class/position/parent/numChildren/isHidden/isFrozen/layer.
+	-- (Migrated from maxmcp/tools/_query_scene_core.py _filter_list_maxscript)
+	fn filterObjects class_name:"" pattern:"" layer:"" roots_only:false limit:200 offset:0 =
+	(
+		local esc = MCP_Server.escapeJsonString
+		local matched = #()
+		for _obj in objects do (
+			local _ok = true
+			if class_name != "" and ((classOf _obj) as string) != class_name do _ok = false
+			if _ok and pattern != "" and (not (matchPattern _obj.name pattern:pattern)) do _ok = false
+			if _ok and layer != "" and _obj.layer.name != layer do _ok = false
+			if _ok and roots_only and _obj.parent != undefined do _ok = false
+			if _ok do append matched _obj
+		)
+		local totalMatched = matched.count
+		local startIdx = offset + 1
+		local endIdx = amin #(matched.count, offset + limit)
+		local arr = #()
+		for i = startIdx to endIdx do (
+			local _obj = matched[i]
+			local p = [0, 0, 0]
+			try (p = _obj.transform.pos) catch (try (p = _obj.transform.position) catch (p = [0, 0, 0]))
+			local posStr = this.point3ToJson p
+			local parentName = if _obj.parent != undefined then _obj.parent.name else ""
+			local parentField = if parentName == "" then "null" else ("\"" + (esc parentName) + "\"")
+			local entry = "{" + \
+				"\"name\":\"" + (esc _obj.name) + "\"," + \
+				"\"class\":\"" + (esc ((classOf _obj) as string)) + "\"," + \
+				"\"position\":" + posStr + "," + \
+				"\"parent\":" + parentField + "," + \
+				"\"numChildren\":" + (_obj.children.count as string) + "," + \
+				"\"isHidden\":" + (if _obj.isHidden then "true" else "false") + "," + \
+				"\"isFrozen\":" + (if _obj.isFrozen then "true" else "false") + "," + \
+				"\"layer\":\"" + (esc _obj.layer.name) + "\"" + \
+			"}"
+			append arr entry
+		)
+		local result = "{\"totalMatched\":" + (totalMatched as string) + ",\"objects\":["
+		for i = 1 to arr.count do (
+			if i > 1 do result += ","
+			result += arr[i]
+		)
+		result += "]}"
+		result
+	),
 	temp_geo = #(),
 	temp_bones = #(),
 	temp_geo_handles = #(),
@@ -440,6 +597,10 @@ struct SceneManageStruct
 			return (str_body as string)
 		)
 	),
+	fn point3ToJson p3 =
+	(
+		"[" + (p3.x as string) + "," + (p3.y as string) + "," + (p3.z as string) + "]"
+	),
 	-- Resolve a node by AnimHandle; prefers maxOps.getNodeByHandle, then scan.
 	fn findNodeByHandle h =
 	(
@@ -479,7 +640,43 @@ struct SceneManageStruct
 			"\"names\":" + (this.stringArrayToJson foundNames) + \
 		"}"
 	),
+	-- Group every unhidden node by its MAXScript class and emit JSON:
+	-- {"type_count":K,"total":N,"types":{"<class>":{"count":N,"objects":["name",...]},...}}
+	fn getSceneUnhiddenObjects =
+	(
+		local typeNames = #()   -- unique class names, first-seen order
+		local typeObjects = #() -- parallel array: per-type name arrays
+		local total = 0
+		for o in objects where (not o.isHidden) do
+		(
+			local t = (classOf o) as string
+			local idx = 0
+			for i = 1 to typeNames.count do
+				if typeNames[i] == t do idx = i
+			if idx == 0 then
+			(
+				append typeNames t
+				append typeObjects #(o.name)
+			)
+			else
+			(
+				append typeObjects[idx] o.name
+			)
+			total += 1
+		)
 
+		local result = "{\"type_count\":" + (typeNames.count as string) + \
+		               ",\"total\":" + (total as string) + ",\"types\":{"
+		for i = 1 to typeNames.count do
+		(
+			if i > 1 do result += ","
+			result += "\"" + typeNames[i] + "\":{" + \
+			          "\"count\":" + (typeObjects[i].count as string) + "," + \
+			          "\"objects\":" + (this.stringArrayToJson typeObjects[i]) + "}"
+		)
+		result += "}}"
+		result
+	),
 	-- Collect unhidden Editable_Poly/Mesh + Bone/Biped; keep nodes on this.temp_*
 	-- and return a JSON string of names for the Python bridge.
 	fn getunhidden_meshes_bones =

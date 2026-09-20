@@ -8,6 +8,7 @@ private FastMCP registry only when a toolset is described or a tool is called.
 from __future__ import annotations
 
 import ast
+import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
 from importlib import import_module
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .tool_response import ToolEnvelope, make_structured_tool
+
+logger = logging.getLogger(__name__)
 
 
 META_TOOL_NAMES = frozenset({"list_toolsets", "describe_toolset", "call_tool"})
@@ -231,11 +234,13 @@ class ProgressiveToolCatalog:
         hidden_mcp: Any,
         allowed_modules: Iterable[str],
         toolsets: tuple[ToolsetSpec, ...] = TOOLSET_SPECS,
+        profile_label: str = "progressive",
     ) -> None:
         self.package = package
         self.tools_dir = tools_dir
         self.hidden_mcp = hidden_mcp
         self.toolsets = toolsets
+        self.profile_label = profile_label
         self._allowed_modules = tuple(allowed_modules)
         self._module_tools_cache: dict[str, tuple[str, ...]] | None = None
         self._tool_modules_cache: dict[str, str] | None = None
@@ -246,10 +251,18 @@ class ProgressiveToolCatalog:
         duplicates = sorted({module for module in assigned if assigned.count(module) > 1})
         missing = sorted(set(self._allowed_modules) - set(assigned))
         extra = sorted(set(assigned) - set(self._allowed_modules))
-        if duplicates or missing or extra:
+        if duplicates or extra:
             raise RuntimeError(
                 "Invalid progressive toolset map: "
                 f"duplicates={duplicates}, missing={missing}, extra={extra}"
+            )
+        if missing:
+            # Modules may be allowlisted without belonging to a toolset (e.g.
+            # files / open_scene / instances). Their tools stay dispatchable
+            # via call_tool even though list_toolsets does not group them.
+            logger.warning(
+                "Allowlisted tool modules not covered by any toolset: %s",
+                missing,
             )
 
     @property
@@ -315,7 +328,7 @@ class ProgressiveToolCatalog:
                 }
             )
         return {
-            "profile": "progressive",
+            "profile": self.profile_label,
             "workflow": "list_toolsets -> describe_toolset -> call_tool",
             "tool_count": len(self.tool_modules),
             "toolsets": toolsets,
@@ -443,13 +456,22 @@ def register_progressive_tools(
     allowed_modules: Iterable[str],
     before_call: Callable[[], None] | None = None,
     transport_provider: Callable[[], dict[str, Any] | None] | None = None,
+    toolsets: tuple[ToolsetSpec, ...] | None = None,
+    profile: str = "progressive",
 ) -> ProgressiveToolCatalog:
-    """Register the three compact public meta-tools and return their catalog."""
+    """Register the three compact public meta-tools and return their catalog.
+
+    In the progressive profile ``hidden_mcp`` is a separate, non-advertised
+    registry. In eager profiles (full/core) pass ``hidden_mcp=public_mcp`` so
+    the meta-tools discover and dispatch the already-registered tools.
+    """
     catalog = ProgressiveToolCatalog(
         package=package,
         tools_dir=tools_dir,
         hidden_mcp=hidden_mcp,
         allowed_modules=allowed_modules,
+        toolsets=toolsets if toolsets is not None else TOOLSET_SPECS,
+        profile_label=profile,
     )
 
     def list_toolsets() -> dict[str, Any]:
