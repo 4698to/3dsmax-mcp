@@ -18,7 +18,7 @@ Automate everything!
 - **160 MCP tools** — For scene reads, modeling, materials, modifiers, controllers, viewport capture, procedural graphs, and plugin workflows.
 - **Native Bridge** — only 2023-2027 versions.
 - **Introspection** — discover arbitrary Max classes for all kinds of automation and scripting purposes. 
-- **Bundled agent skill** — There is a bundled maxscript documentation if you want to create your own tools.
+- **Bundled agent skills** — **Remote** (`3dsmax-mcp-remote`, default): docs + HTTP helper scripts for agent host A. **Local** (`3dsmax-mcp-dev`): maintainer docs. Rebuild with `build_skill_package.bat` / `python scripts/build_skill.py --profile remote|local|both`. See [Advanced configuration](docs/ADVANCED.md#agent-skill).
 - **FStorm materials and lights** — `FStorm`/`FStormPBR` texture import, palette laydown and smart import; create and edit plane/disc/sphere lights and suns with native solar controls. See [support and validation](docs/FSTORM.md).
 
 ## Requirements
@@ -105,6 +105,40 @@ Tools: `smart_import`, `execute_maxscript`, `create_shell_material`, `manage_sce
 Automate repetitive work with MAXScript, or build procedural geometry and modifiers with Max Creation Graph (MCG). Explore installed classes through introspection and build, compile, and test graphs with the `mcg_*` tools.
 
 </details>
+
+## Running the server (launchers & transports)
+
+The repository ships two launchers, one per MCP transport:
+
+| Launcher | Transport | When to use |
+|----------|-----------|-------------|
+| `start_python_server.bat` | `streamable-http` | Serve over HTTP bound to `0.0.0.0:8000` so MCP clients on your LAN can connect. The console prints the reachable LAN IP, e.g. `http://192.168.x.x:8000/mcp`. |
+| `start_python_server_stdio.bat` | `stdio` | Run the server standalone on stdin/stdout. MCP clients such as Claude Desktop and Cursor normally launch this mode themselves; this launcher is for testing. |
+
+Both require `uv` (run `install_deps.bat` once first) and keep their console window open while the server runs.
+
+For a remote 3ds Max (Python and Max on different machines), edit `max_instances.ini` (copy from `max_instances.ini.example`):
+
+```ini
+[instances]
+max1 = 192.168.x.x:8765
+```
+
+Priority: `MAXMCP_INSTANCES` env > `max_instances.ini` > local registry auto-discovery > `127.0.0.1:8765`.
+
+The transport is selected by the `MCP_TRANSPORT` environment variable: `stdio` (default) or `streamable-http`. When serving over HTTP, `MCP_HTTP_HOST` (default `0.0.0.0`) and `MCP_HTTP_PORT` (default `8000`) control the bind address and port.
+
+Point an MCP client at the HTTP endpoint `http://<ip>:8000/mcp` (replace `<ip>` with the printed LAN IP):
+
+```json
+{
+  "mcpServers": {
+    "3dsmax-mcp": {
+      "url": "http://192.168.x.x:8000/mcp"
+    }
+  }
+}
+```
 
 ## Tools
 
@@ -273,7 +307,10 @@ and existing procedural skies use the provider's dome or environment binding.
 | `manage_layers` | Create, delete, list, and configure layers; move/select objects |
 | `manage_groups` | Create, ungroup, open, close, attach, detach groups |
 | `manage_selection_sets` | Named selection sets |
-| `manage_scene` | Hold, fetch, reset, save, scene info |
+| `manage_scene` | Hold, fetch, reset, save, scene info, save older-version copy |
+| `load_scene` | Load a `.max` file (`MCP_SceneManage.loadScene`) |
+| `get_unhidden_meshes_bones` | Unhidden editable meshes and bones with AnimHandles |
+| `select_by_handles` | Select nodes by AnimHandle |
 | `undo_last` | Undo the last 3ds Max scene operation |
 
 ### Viewport & render
@@ -282,7 +319,7 @@ and existing procedural skies use the provider's dome or environment binding.
 |------|-------------|
 | `agent_viewport` | Independent floating agent view, visual targeting and V-Ray preview controls |
 | `set_viewport` | Position and frame the agent or user viewport |
-| `capture_viewport` | Capture the agent or user viewport as an image |
+| `capture_viewport` | Capture the agent or user viewport as an image. Keep Max visible: on older TCP bridges (e.g. Max 2015) minimized `gw.getViewportDib()` still succeeds but returns a 16×16 placeholder — call `restore_max_window` first, or use `render_scene`. Over streamable-http, results include `download_url` for files under `%TEMP%/3dsmax-mcp` (no shared workspace required) |
 | `capture_multi_view` | Capture several views into one image, with agent-view restoration |
 | `capture_screen` | Capture visible desktop pixels or crop to the V-Ray frame buffer |
 | `render_scene` | Render the current view |
@@ -398,10 +435,11 @@ and existing procedural skies use the provider's dome or environment binding.
 
 ## Skill & reference
 
-The installer builds an agent skill from `skills/3dsmax-mcp-dev/SKILL.md` with tool-choice rules, material pipeline notes, and MAXScript reference files. Rebuild manually with `python scripts/build_skill.py` — see [Advanced configuration](docs/ADVANCED.md#agent-skill).
+Two skill packages: **remote** (`3dsmax-mcp-remote`, for agent host A with HTTP helpers) and **local** (`3dsmax-mcp-dev`, maintainer docs). Shared references are authored under `skills/3dsmax-mcp-dev/`. Rebuild with `python scripts/build_skill.py --profile remote|local|both` or `build_skill_package.bat`. See [Advanced configuration](docs/ADVANCED.md#agent-skill).
 
 ## Further reading
 
 - **[Advanced configuration](docs/ADVANCED.md)** — architecture, safe mode, tool profiles, native builds
+- **[Audit log](docs/AUDIT.md)** — important-operation JSONL log and optional `user_id`
 - **[CHANGELOG.md](docs/CHANGELOG.md)** — release history
 - **[LICENSE](LICENSE)**

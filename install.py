@@ -40,7 +40,7 @@ APPLICATION_PACKAGE_DST = (
     Path(os.environ.get("ProgramData", "")) / "Autodesk" / "ApplicationPlugins" / BUNDLE_PACKAGE_NAME
 )
 
-MS_SERVER = ROOT / "maxscript" / "mcp_server.ms"
+MS_SERVER = ROOT / "maxscript" / "mcp" / "mcp_server.ms"
 CONFIG_SRC = ROOT / "mcp_config.ini"
 CONFIG_DIR = Path(os.environ.get("LOCALAPPDATA", "")) / "3dsmax-mcp"
 CONFIG_DST = CONFIG_DIR / "mcp_config.ini"

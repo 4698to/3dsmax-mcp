@@ -1,0 +1,15 @@
+flowchart LR
+  A[选 Max 实例] --> B[OCR 健康检查]
+  B --> C[打开自动蒙皮 UI]
+  C --> D[收集模型/骨骼 handles]
+  D --> E[准备列表 · 选定校验]
+  E --> F{用户确认?}
+  F -->|否| X([停止])
+  F -->|是| G[开始蒙皮 · 等待完成]
+
+  classDef step fill:#14532d,stroke:#86efac,color:#dcfce7
+  classDef gate fill:#713f12,stroke:#fde68a,color:#fefce8
+  classDef stop fill:#7f1d1d,stroke:#fca5a5,color:#fee2e2
+  class A,B,C,D,E,G step
+  class F gate
+  class X stop

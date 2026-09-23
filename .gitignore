@@ -12,6 +12,7 @@ build/
 .DS_Store
 .claude/
 .agents/
+.cursor/
 AGENTS.md
 TODO.md
 PROJECT_OVERVIEW.md
@@ -20,7 +21,9 @@ nul
 cache/
 local/
 .env
-
+max_instances.ini
+outputs/
+screenshots/
 # Live smoke run output (redirected stdout/stderr)
 smoke_out.json
 smoke_err.txt
@@ -56,3 +59,10 @@ bundle/Contents/scripts/
 dev.bat
 native/dev.bat
 native/deploy.bat
+
+# Local additions
+/maxscript/find_goskin.ms
+bat_test3.log
+debug.log
+listener_input.png
+maxscript/mcp/Untitled-1.json

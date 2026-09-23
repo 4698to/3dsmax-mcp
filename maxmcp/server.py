@@ -2,22 +2,136 @@ import configparser
 import logging
 import os
 import sys
+import tempfile
 from importlib import import_module
 from functools import lru_cache
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from .max_client import MaxClient
-from .tool_discovery import register_progressive_tools
+from .tool_discovery import TOOLSET_SPECS, ToolsetSpec, register_progressive_tools
 from .tool_response import make_structured_tool
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-mcp = FastMCP("3dsmax-mcp")
+mcp = FastMCP(
+    "3dsmax-mcp",
+    # Used only when running with transport=streamable-http (MCP_TRANSPORT).
+    # stdio transport ignores these.
+    host=os.environ.get("MCP_HTTP_HOST", "0.0.0.0"),
+    port=int(os.environ.get("MCP_HTTP_PORT", "8000")),
+)
+
+
+def _install_session_release_hook() -> None:
+    """Release Max leases / cancel acquire waits when an MCP ServerSession ends."""
+    try:
+        from mcp.server.session import ServerSession
+    except ImportError:
+        return
+    if getattr(ServerSession, "_maxmcp_release_hook", False):
+        return
+    original_aexit = ServerSession.__aexit__
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            return await original_aexit(self, exc_type, exc, tb)
+        finally:
+            try:
+                from .instance_manager import manager
+
+                manager.release_all_for_session(self)
+            except Exception:
+                logging.exception(
+                    "Failed to release 3ds Max lease on MCP session end"
+                )
+
+    ServerSession.__aexit__ = __aexit__  # type: ignore[method-assign]
+    ServerSession._maxmcp_release_hook = True  # type: ignore[attr-defined]
+
+
+_install_session_release_hook()
+
 # Operational tools loaded by the progressive profile live here.  This server
 # is never run, so its tools remain callable without being advertised by the
 # public MCP list_tools surface.
 _progressive_mcp = FastMCP("3dsmax-mcp-progressive-hidden")
-client = MaxClient()
+
+
+class SessionRoutedClient:
+    """Send tool traffic to the Max instance bound to the current MCP session.
+
+    Falls back to the sole configured instance (max_instances.ini / env), then
+    to a localhost MaxClient. Without this proxy, tools always hit 127.0.0.1
+    even after acquire_instance selected a remote host.
+    """
+
+    def __init__(self) -> None:
+        self._fallback = MaxClient()
+
+    def _active(self) -> MaxClient:
+        from .instance_manager import manager
+
+        session = None
+        try:
+            ctx = mcp.get_context()
+            session = getattr(ctx, "session", None) if ctx is not None else None
+        except Exception:
+            session = None
+        if session is not None:
+            try:
+                return manager.get_for_session(session)
+            except Exception:
+                pass
+        with manager._lock:
+            if len(manager._instances) == 1:
+                inst = manager._instances[0]
+                return manager._clients[inst.name]
+        return self._fallback
+
+    def send_command(self, *args, **kwargs):
+        return self._active().send_command(*args, **kwargs)
+
+    def clear_last_response(self) -> None:
+        return self._active().clear_last_response()
+
+    def get_last_transport(self):
+        return self._active().get_last_transport()
+
+    def __getattr__(self, name: str):
+        return getattr(self._active(), name)
+
+
+client = SessionRoutedClient()
+
+# Shared workspace for file transfer. Prefer max_instances.ini [workspace] path=
+# (or MAXMCP_WORKSPACE) so Max hosts and Python share one directory. When that
+# is unset there is no shared workspace — fall back to a per-machine TEMP dir
+# (same-host only).
+#
+# Viewport / screen captures always land under COMMS_DIR (%TEMP%/3dsmax-mcp),
+# which is also served over HTTP /files so agents can use download_url without
+# configuring a shared workspace.
+from .workspace_config import resolve_workspace_dir, workspace_info
+
+COMMS_DIR = Path(tempfile.gettempdir()) / "3dsmax-mcp"
+try:
+    COMMS_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    logging.warning("Could not create comms dir %s", COMMS_DIR)
+
+WORKSPACE_DIR = resolve_workspace_dir()
+try:
+    WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    logging.warning("Could not create workspace dir %s", WORKSPACE_DIR)
+_ws = workspace_info()
+logging.info(
+    "Workspace: shared=%s path=%s source=%s comms=%s",
+    _ws["shared_configured"],
+    _ws["effective_workspace"],
+    _ws["source"],
+    COMMS_DIR,
+)
 
 if __name__ == "__main__" and __spec__ is not None:
     sys.modules.setdefault(__spec__.name, sys.modules[__name__])
@@ -54,6 +168,9 @@ _READ_ONLY_TOOLS = {
     "capture_viewport",
     "capture_multi_view",
     "capture_screen",
+    "check_dialog_ocr_health",
+    "get_max_window_state",
+    "recognize_plugin_dialog",
     "get_effects",
     "get_state_sets",
     "get_camera_sequence",
@@ -88,12 +205,34 @@ _DESTRUCTIVE_TOOLS = {
     "manage_groups",
     "manage_selection_sets",
     "merge_from_file",
+    "upload_scene_and_capture",
     "render_cancel",
     "delete_effect",
     "undo_last",
     "mcg_cleanup_workspace",
     "mcg_reload_operators",
 }
+
+# Non-destructive tools that still need an audit trail.
+_AUDIT_EXTRA = {
+    "goskin_confirm_start",
+    "goskin_run_skin",
+    "goskin_run_auto",
+    "click_plugin_dialog_button",
+    "click_plugin_menu_path",
+    "restore_max_window",
+    "acquire_instance",
+    "release_instance",
+    "load_scene",
+    "manage_scene",
+    "save_scene_as",
+    "save_as",
+    "render_scene",
+    "execute_maxscript",
+    "execute_python",
+}
+
+_AUDIT_TOOLS = _DESTRUCTIVE_TOOLS | _AUDIT_EXTRA
 
 _IDEMPOTENT_TOOLS = {
     "cosmos_search",
@@ -117,6 +256,7 @@ _IDEMPOTENT_TOOLS = {
     "capture_viewport",
     "capture_multi_view",
     "capture_screen",
+    "get_max_window_state",
     "select_objects",
     "set_visibility",
     "mcg_get_context",
@@ -243,8 +383,13 @@ CORE_TOOL_MODULES = (
     "lighting",
     "organize",
     "viewport",
+    "dialog_monitor",
+    "goskin",
     "identify",
     "file_access",
+    "files",
+    "open_scene",
+    "instances",
     "learning",
     "controllers",
     "keyframes",
@@ -290,9 +435,16 @@ def _tool_profile() -> str:
     return "full"
 
 
+def _toolset_specs_for(modules: list[str]) -> tuple[ToolsetSpec, ...]:
+    """Keep only the toolset specs fully covered by the given modules."""
+    allowed = set(modules)
+    return tuple(spec for spec in TOOLSET_SPECS if set(spec.modules) <= allowed)
+
+
 def _register_tool_modules() -> None:
     import_module(".tools.routing", package=__package__)
-    if _tool_profile() == "progressive":
+    profile = _tool_profile()
+    if profile == "progressive":
         register_progressive_tools(
             public_mcp=mcp,
             hidden_mcp=_progressive_mcp,
@@ -301,14 +453,30 @@ def _register_tool_modules() -> None:
             allowed_modules=CORE_TOOL_MODULES + SPECIALTY_TOOL_MODULES,
             before_call=client.clear_last_response,
             transport_provider=client.get_last_transport,
+            profile=profile,
         )
         return
 
     modules = list(CORE_TOOL_MODULES)
-    if _tool_profile() == "full":
+    if profile == "full":
         modules.extend(SPECIALTY_TOOL_MODULES)
     for name in modules:
         import_module(f".tools.{name}", package=__package__)
+
+    # Every profile also registers the discovery meta-tools so agents that
+    # follow the progressive-style guidance (list_toolsets first) never hit
+    # "Unknown tool" against a full/core server.
+    register_progressive_tools(
+        public_mcp=mcp,
+        hidden_mcp=mcp,
+        package=__package__,
+        tools_dir=Path(__file__).resolve().parent / "tools",
+        allowed_modules=modules,
+        toolsets=_toolset_specs_for(modules),
+        before_call=client.clear_last_response,
+        transport_provider=client.get_last_transport,
+        profile=profile,
+    )
 
 
 # Import tool modules to trigger @mcp.tool() registration. Default is full;
@@ -367,6 +535,12 @@ def max_assistant() -> str:
             "schemas, then invoke the selected operational tool through call_tool. Never call a "
             "hidden operational name as a top-level MCP tool.\n"
         )
+    elif _tool_profile() in {"full", "core"}:
+        scene_call_rule += (
+            "The discovery meta-tools list_toolsets / describe_toolset / call_tool are also "
+            "registered, but operational tools are advertised directly — prefer calling them by "
+            "name; use list_toolsets only to browse capability groups or verify a tool exists.\n"
+        )
     base_rules = (
         "You are a 3ds Max assistant connected via MCP.\n"
         f"{scene_call_rule}"
@@ -391,6 +565,12 @@ def max_assistant() -> str:
         "Work in natural language with the user, but keep tool usage structured and explicit.\n"
         "DO NOT render unless the user asks.\n"
         "Use capture_viewport for fast viewport context.\n"
+        "For plugin UI that has no MaxScript API, use recognize_plugin_dialog / "
+        "click_plugin_dialog_button / click_plugin_menu_path (OCR + mouse). "
+        "Check check_dialog_ocr_health first if OCR fails.\n"
+        "Important tool calls are audited to %TEMP%/3dsmax-mcp/audit/*.jsonl. "
+        "You may pass optional user_id inside tools/call arguments (not in each tool schema) "
+        "to tag the acting user; see docs/AUDIT.md and get_file_service_info.\n"
         "MCP tool replies are structured objects: `{ok, result}` on success, `{ok, error}` on failure, optional top-level `hint` (`message`, `suggested_tools`, `next`). Transport only when present on errors. Set MCP_TRIPBACK_MODE=full for elapsed_ms and full transport metadata.\n"
         "If ok is false, read error.message and any hint.suggested_tools before retrying or choosing a fallback.\n"
         f"Reference resource: {SKILL_RESOURCE_URI}\n"
@@ -400,7 +580,14 @@ def max_assistant() -> str:
 
 
 def main():
-    mcp.run(transport="stdio")
+    # Default: stdio (used by MCP clients such as Claude Desktop / Cursor).
+    # Set MCP_TRANSPORT=streamable-http to serve over HTTP; bind address and
+    # port come from MCP_HTTP_HOST / MCP_HTTP_PORT (see FastMCP settings above).
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "streamable-http":
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

@@ -50,7 +50,10 @@ Issues = "https://github.com/cl0nazepamm/3dsmax-mcp/issues"
 Changelog = "https://github.com/cl0nazepamm/3dsmax-mcp/blob/master/docs/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
-packages = ["maxmcp"]
+# dialog_monitor must be a real package (not force-include): editable installs
+# otherwise leave a stale copy under site-packages that shadows the checkout and
+# breaks imports such as dialog_monitor.goskin_flow.
+packages = ["maxmcp", "dialog_monitor"]
 
 # Ship the Max-side payload inside the package, keeping the SAME relative layout the
 # repo uses. install.py resolves everything from `ROOT = Path(__file__).parent`, so it
@@ -62,6 +65,7 @@ packages = ["maxmcp"]
 "install.py" = "maxmcp/installer.py"
 "pyproject.toml" = "maxmcp/pyproject.toml"
 "mcp_config.ini" = "maxmcp/mcp_config.ini"
+"max_instances.ini.example" = "maxmcp/max_instances.ini.example"
 "maxscript" = "maxmcp/maxscript"
 "native/bin" = "maxmcp/native/bin"
 "bundle/PackageContents.xml.in" = "maxmcp/bundle/PackageContents.xml.in"
@@ -72,3 +76,7 @@ packages = ["maxmcp"]
 [project.scripts]
 3dsmax-mcp = "maxmcp.server:main"
 3dsmax-mcp-install = "maxmcp.installer:main"
+
+[[tool.uv.index]]
+name = "tencent"
+url = "https://mirrors.cloud.tencent.com/pypi/simple/"
