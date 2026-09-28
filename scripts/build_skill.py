@@ -114,6 +114,21 @@ def stage_package(profile: str) -> Path:
             if n_ov:
                 print(f"  [{skill_name}] references/: overlaid {n_ov} remote-specific md")
 
+    # Remote profile: bundle nested subskills (agent-callable skills with own SKILL.md).
+    if profile == "remote":
+        subskills_src = REMOTE_SKILL_DIR / "subskills"
+        if subskills_src.is_dir():
+            subskills_dst = dist_dir / "subskills"
+            if subskills_dst.exists():
+                shutil.rmtree(subskills_dst)
+            shutil.copytree(
+                subskills_src,
+                subskills_dst,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"),
+            )
+            n_sk = sum(1 for p in subskills_dst.rglob("SKILL.md"))
+            print(f"  [{skill_name}] subskills/: copied ({n_sk} SKILL.md)")
+
     scripts_src: Path = cfg["scripts_src"]
     scripts_dst = dist_dir / "scripts"
     if cfg["local_scripts_readme_only"]:

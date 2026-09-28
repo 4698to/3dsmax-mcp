@@ -17,10 +17,9 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from lib.cli_util import add_common_args, die, print_json
+from lib.cli_util import add_common_args, build_session, die, print_json
 from lib.mcp_http import (
     McpHttpError,
-    McpHttpSession,
     coerce_payload,
     envelope_ok,
 )
@@ -124,7 +123,7 @@ def main() -> int:
     mesh_names = [s.strip() for s in (args.mesh_names or "").split(",") if s.strip()] or None
     bone_names = [s.strip() for s in (args.bone_names or "").split(",") if s.strip()] or None
 
-    session = McpHttpSession(args.url, client_name="goskin-dev-flow", timeout=args.timeout)
+    session = build_session(args, client_name="goskin-dev-flow")
     acquired = False
     flow_ok = False
     summary: dict[str, Any] = {"ok": False}

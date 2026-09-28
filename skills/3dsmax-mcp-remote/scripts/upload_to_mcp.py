@@ -12,8 +12,8 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from lib.cli_util import add_common_args, die, print_json
-from lib.mcp_http import McpHttpError, McpHttpSession, coerce_payload, envelope_ok
+from lib.cli_util import add_common_args, build_session, die, print_json
+from lib.mcp_http import McpHttpError, coerce_payload, envelope_ok
 
 
 def main() -> int:
@@ -36,7 +36,7 @@ def main() -> int:
     if not src.is_file():
         die(f"not a file: {src}")
 
-    session = McpHttpSession(args.url, client_name="upload-to-mcp", timeout=args.timeout)
+    session = build_session(args, client_name="upload-to-mcp")
     try:
         if args.via_mcp:
             data_b64 = base64.b64encode(src.read_bytes()).decode("ascii")

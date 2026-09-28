@@ -18,10 +18,9 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from lib.cli_util import add_common_args, die, print_json
+from lib.cli_util import add_common_args, build_session, die, print_json
 from lib.mcp_http import (
     McpHttpError,
-    McpHttpSession,
     coerce_payload,
     envelope_ok,
 )
@@ -78,7 +77,7 @@ def main() -> int:
         f"viewport_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
     )
 
-    session = McpHttpSession(args.url, client_name="capture-viewport-shot", timeout=args.timeout)
+    session = build_session(args, client_name="capture-viewport-shot")
     acquired = False
     try:
         skip_acquire = bool(args.no_acquire)

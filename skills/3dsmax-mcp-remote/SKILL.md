@@ -42,6 +42,20 @@ description: >-
 
 Details: [scripts/README.md](scripts/README.md). Scripts are stdlib HTTP only (no `maxmcp`). If unsure of the URL, use MCP tools directly and skip the scripts.
 
+### Session resume（恢复既有 MCP 会话）
+
+脚本默认新建 MCP 会话。需要**复用服务器端既有会话**（保留其对 Max 实例的租约/路由）时，加以下参数：
+
+```bash
+python goskin_dev_flow.py --session-id <Mcp-Session-Id> ...        # 直接指定上次的 id
+python goskin_dev_flow.py --session-id-file .mcp_session ...       # 从文件恢复，新 id 也自动写回
+```
+
+- 会话 id 由**服务器**下发（`Mcp-Session-Id` 响应头），客户端只回传、不自造；未知/过期 id → 服务器返回 HTTP 404，脚本自动重新握手拿到新会话并重试一次，无感知。
+- 带恢复 id 时脚本**跳过 `initialize` 握手**（重复 initialize 会被服务器拒绝），直接以真实请求探测。
+- 典型用途：本对话已占住某 Max 实例时，恢复本会话的 id 跑脚本，脚本与对话共享同一租约，不触发「实例已被占用」冲突。
+- 详细约定见 [scripts/README.md](scripts/README.md) § 会话恢复（`Mcp-Session-Id`）。
+
 ## Scene file ops (MCP tools — do not invent Max-side scripts)
 
 Drive save/load/reset **only** through these tools on B (never raw `saveMaxFile` / Max script paths on A):
@@ -88,6 +102,16 @@ Principles:
 - Prefer a dedicated MCP tool over raw MAXScript when a tool clearly matches the task.
 - Do not render unless the user explicitly asks. Viewport capture is fine when visual proof is useful — **never wait in the acquire queue only to screenshot** ([instance-locks.md](instance-locks.md)).
 - Multiple Max instances: `list_max_instances`, `select_max_instance(pid|name)`, `get_selected_max_instance`, and `release_max_instance` are available in every profile. Prefer `name` from `list_instances` (e.g. `max-8765`) for remote/ini targets — it acquires a session lease without resetting the scene. `pid` binds local native pipes. The first successful native connection stays bound to that Max. Starting or claiming another Max only changes the default for unbound clients. If the selected Max closes, explicitly select another or release it; clients never silently switch. `MCP_MAX_PID` or `MCP_MAX_PIPE` pins the startup target (`MCP_MAX_PIPE` takes precedence). Release also clears startup pinning.
+
+## Subskills (nested skills)
+
+本包附带可独立调用的子技能（保留各自 frontmatter，随包分发安装到 `subskills/`）：
+
+| 子技能 | 用途 |
+|--------|------|
+| `3dsmax-spring-bone-audit` | 弹簧/柔体骨骼审计：找出应提交给解算工具的辅助骨骼链首 |
+
+调用方式取决于宿主 skill 系统是否递归发现嵌套 `SKILL.md`；若宿主仅扫描顶层 skills 目录，请把 `subskills/3dsmax-spring-bone-audit/` 单独安装为技能后按名字调用。
 
 ## Read on demand (modules)
 

@@ -25,6 +25,27 @@ python goskin_dev_flow.py --instance max1 --scene C:\path\to\file.max
 
 If `MAXMCP_URL` / `--url` is missing, scripts **exit with an error** instead of guessing.
 
+## 会话恢复（`Mcp-Session-Id`）
+
+MCP streamable-http 的会话 id 由**服务器**在首次响应时下发（`Mcp-Session-Id` 响应头），客户端只能回传、不能自造。脚本默认每次开新会话；想**复用服务器端既有会话**（保留其到 Max 实例的租约/路由）时，用下面任一参数恢复：
+
+```bash
+# 方式一：直接给 id（来自上一次脚本运行，或 IDE MCP 客户端持有的会话）
+python list_online_instances.py --session-id 3f2a1b9c...
+
+# 方式二：用文件记忆（首次运行自动把新 id 写回文件，之后自动恢复）
+python list_online_instances.py --session-id-file .mcp_session
+python capture_viewport_shot.py  --session-id-file .mcp_session
+python goskin_dev_flow.py        --session-id-file .mcp_session --instance max-8765
+```
+
+行为约定：
+
+- **跳过握手**：带恢复的 id 时脚本不再发 `initialize`（对已有会话重复 initialize 会被服务器拒绝），直接以 `Mcp-Session-Id` 头发出真实请求探测会话是否仍有效。
+- **404 自动重建**：id 未知/已过期时服务器返回 HTTP 404 `Session not found`；脚本会丢弃旧 id、重新握手拿到新会话，再重试原请求一次，并把新 id 写回 `--session-id-file`（若指定）。
+- **不要自造 id**：id 由服务器生成（`uuid4().hex`），未知 id 一律走上面的 404 重建流程，脚本无感知。
+- **共享租约**：恢复的会话复用该会话在服务器端已持有的实例租约与路由。典型场景——本对话已 `acquire_instance` 占住某 Max，再恢复本对话的会话 id 跑脚本，脚本在同一会话内执行，不会因「实例已被占用」而冲突（对应 SKILL.md 里「先 release 再跑脚本」的替代方案）。
+
 ## Scripts
 
 | Script | MCP / HTTP |

@@ -11,8 +11,8 @@ _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
 
-from lib.cli_util import add_common_args, die, print_json
-from lib.mcp_http import McpHttpError, McpHttpSession, coerce_payload, envelope_ok
+from lib.cli_util import add_common_args, build_session, die, print_json
+from lib.mcp_http import McpHttpError, coerce_payload, envelope_ok
 
 
 def main() -> int:
@@ -27,7 +27,7 @@ def main() -> int:
     args = ap.parse_args()
 
     try:
-        session = McpHttpSession(args.url, client_name="list-online-instances", timeout=args.timeout)
+        session = build_session(args, client_name="list-online-instances")
         raw = session.call_tool("list_instances")
         data = coerce_payload(envelope_ok(raw) if isinstance(raw, dict) and "ok" in raw else raw)
         if isinstance(data, dict) and "ok" in data and "result" in data:

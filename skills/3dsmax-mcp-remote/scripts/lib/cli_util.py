@@ -21,6 +21,30 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         default=600.0,
         help="HTTP timeout seconds (default 600)",
     )
+    parser.add_argument(
+        "--session-id",
+        default=None,
+        help="Resume an existing MCP HTTP session (the Mcp-Session-Id from a prior run)",
+    )
+    parser.add_argument(
+        "--session-id-file",
+        default=None,
+        help="File holding the Mcp-Session-Id to resume; a fresh session id is also saved here",
+    )
+
+
+def build_session(
+    args: argparse.Namespace, *, client_name: str = "3dsmax-mcp-remote-skill"
+) -> Any:
+    from .mcp_http import McpHttpSession
+
+    return McpHttpSession(
+        args.url,
+        client_name=client_name,
+        timeout=args.timeout,
+        session_id=args.session_id,
+        session_id_file=args.session_id_file,
+    )
 
 
 def print_json(obj: Any) -> None:

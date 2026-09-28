@@ -50,6 +50,8 @@ class McpHttpSession:
         *,
         client_name: str = "3dsmax-mcp-remote-skill",
         timeout: float = 600.0,
+        session_id: str | None = None,
+        session_id_file: str | os.PathLike | None = None,
     ) -> None:
         try:
             self.mcp_url = resolve_mcp_url(mcp_url)
@@ -58,9 +60,37 @@ class McpHttpSession:
             raise McpHttpError(str(exc)) from exc
         self.timeout = float(timeout)
         self.client_name = client_name
-        self.session_id: str | None = None
+        self._session_id_file = str(session_id_file) if session_id_file else None
+        self.session_id = session_id or self._read_session_file(self._session_id_file)
         self._next_id = 1
         self._initialized = False
+
+    @staticmethod
+    def _read_session_file(path: str | None) -> str | None:
+        if not path:
+            return None
+        try:
+            sid = Path(path).read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return sid or None
+
+    def _remember_session(self, sid: str) -> None:
+        if not self._session_id_file:
+            return
+        try:
+            Path(self._session_id_file).write_text(sid, encoding="utf-8")
+        except OSError:
+            pass
+
+    def _drop_session(self) -> None:
+        self.session_id = None
+        if not self._session_id_file:
+            return
+        try:
+            Path(self._session_id_file).unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def _alloc_id(self) -> int:
         n = self._next_id
@@ -68,37 +98,42 @@ class McpHttpSession:
         return n
 
     def _post_rpc(self, payload: dict[str, Any]) -> Any:
-        headers = {
-            "Accept": "application/json, text/event-stream",
-            "Content-Type": "application/json; charset=utf-8",
-        }
-        if self.session_id:
-            headers["Mcp-Session-Id"] = self.session_id
-        body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-        req = Request(self.mcp_url, data=body, headers=headers, method="POST")
-        try:
-            with urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read()
-                sid = resp.headers.get("Mcp-Session-Id") or resp.headers.get("mcp-session-id")
-                if sid and not self.session_id:
-                    self.session_id = sid
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
-            raise McpHttpError(f"HTTP {exc.code} from MCP: {detail[:500]}") from exc
-        except URLError as exc:
-            raise McpHttpError(f"MCP unreachable at {self.mcp_url}: {exc}") from exc
+        for attempt in (1, 2):
+            headers = {
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json; charset=utf-8",
+            }
+            if self.session_id:
+                headers["Mcp-Session-Id"] = self.session_id
+            body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+            req = Request(self.mcp_url, data=body, headers=headers, method="POST")
+            try:
+                with urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read()
+                    sid = resp.headers.get("Mcp-Session-Id") or resp.headers.get("mcp-session-id")
+                    if sid and not self.session_id:
+                        self.session_id = sid
+                        self._remember_session(sid)
+            except HTTPError as exc:
+                if attempt == 1 and exc.code == 404 and self.session_id:
+                    self._drop_session()
+                    self._initialize_handshake()
+                    continue
+                detail = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+                raise McpHttpError(f"HTTP {exc.code} from MCP: {detail[:500]}") from exc
+            except URLError as exc:
+                raise McpHttpError(f"MCP unreachable at {self.mcp_url}: {exc}") from exc
 
-        if not raw.strip():
-            return None
-        for line in raw.splitlines():
-            s = line.strip()
-            if s.startswith(b"data:"):
-                return json.loads(s[5:].strip().decode("utf-8"))
-        return json.loads(raw.decode("utf-8"))
+            if not raw.strip():
+                return None
+            for line in raw.splitlines():
+                s = line.strip()
+                if s.startswith(b"data:"):
+                    return json.loads(s[5:].strip().decode("utf-8"))
+            return json.loads(raw.decode("utf-8"))
+        raise McpHttpError("MCP session retry exhausted")
 
-    def ensure_initialized(self) -> None:
-        if self._initialized:
-            return
+    def _initialize_handshake(self) -> None:
         self._post_rpc(
             {
                 "jsonrpc": "2.0",
@@ -112,6 +147,14 @@ class McpHttpSession:
             }
         )
         self._post_rpc({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    def ensure_initialized(self) -> None:
+        if self._initialized:
+            return
+        if self.session_id:
+            self._initialized = True
+            return
+        self._initialize_handshake()
         self._initialized = True
 
     def list_tools(self, *, raw: bool = False) -> list[dict[str, Any]]:
