@@ -46,12 +46,12 @@ Each `python …/goskin_dev_flow.py` starts a **new** MCP HTTP session. Leases a
 
 Do **not** use `--keep-lease` unless a follow-up call in the **same** long-lived MCP session will continue (IDE tool loop). For one-shot CLI scripts, omit it.
 
-## GoSkin is one script
+## GoSkin is a queue job
 
-Do not `load_scene` in the IDE and then start `goskin_dev_flow.py`. Pass the file in:
+自动蒙皮任务统一走 `submit_goskin_job`（服务端排队、挑空闲实例、独占租约跑完整流程），**不要**自己 `acquire_instance` 再跑 `goskin_dev_flow.py`（该脚本仅供低层 OCR 调试）：
 
-```bash
-python goskin_dev_flow.py --url <mcp.json URL> --instance <name> --scene <local.max>
+```text
+workspace_upload <本机.max>  →  submit_goskin_job(scene_local_path=<上传的 local_path>)  →  轮询 get_goskin_job(job_id)
 ```
 
-That process uploads, loads `local_path`, and runs GoSkin in one session. Omit `--scene` only when the scene is already open. If this chat already holds the lease, `release_instance` first (does not unload), then run the script once. Do not write a second `call('goskin_ensure_ready')` and do not re-check busy with `list_online_instances.py`.
+`scene_local_path` 传上传返回的 `local_path`；省略则用被分配实例的当前场景。提交前不要手动 acquire——实例由服务端 worker 独占租给任务，手动 acquire 会互相卡死（`INSTANCE_BUSY`）。完整约定见 [goskin-job-queue.md](references/goskin-job-queue.md)。

@@ -3,11 +3,13 @@
 > 服务端 B 的**任务仲裁层**（`maxmcp/jobs/`，设计文档 `docs/goskin-job-queue-design.md`）。
 > 多人/批量提交自动蒙皮时**优先走队列**，不要各自 `acquire_instance` 抢实例。
 
-## 什么时候用队列，什么时候用 `goskin_dev_flow.py`
+## 什么时候用队列
+
+自动蒙皮**统一走队列**，`goskin_dev_flow.py` 不再用于自动蒙皮任务（保留仅供低层 OCR 流程调试参考，不面向任务提交）。
 
 | 场景 | 用 |
 |------|-----|
-| 一次提交一个任务，且要尽快独占一个实例跑完（交互式） | `goskin_dev_flow.py`（单会话） |
+| 单个自动蒙皮任务（也要尽快独占跑完） | **队列工具（本页）** |
 | 多用户并发提交 / 批量文件排队 / 不想自己管实例租约 | **队列工具（本页）** |
 
 队列的核心承诺：提交后服务端**自动排队、自动挑空闲实例（jobs/shared 池）、自动跑完整 GoSkin 流程**，Agent 只需轮询终态。**不要在队列任务上自己 `acquire_instance`**——实例由服务端 worker 独占租给任务，你手动 acquire 会互相卡死（`INSTANCE_BUSY`）。
@@ -16,7 +18,7 @@
 
 | 工具 | 用途 | 关键返回 |
 |------|------|----------|
-| `submit_goskin_job` | 提交任务（唯一入口） | `{job_id, status=queued, queue_position, confirm_mode}` |
+| `submit_goskin_job` | 提交任务（唯一入口） | `{job_id, status=queued, queue_position, user_id, confirm_mode, status_url}` |
 | `get_goskin_job` | 查单个：状态/日志尾/结果 | `{status, log[], result, error}` |
 | `list_goskin_jobs` | 列自己的任务（`status`/`limit`/`offset` 过滤） | `{jobs[], count}` |
 | `cancel_goskin_job` | 取消（自己或管理员） | `{ok, status}` |
@@ -31,12 +33,13 @@
 | `mesh_names` / `bone_names` | 否 | 省略 = 自动解析场景里未隐藏的网格/骨骼 |
 | `confirm_mode` | 否 | `auto`（默认，服务端自动点「开始蒙皮」）或 `manual`（停在 `awaiting_confirm` 等人确认） |
 | `priority` | 否 | `high` / `normal`（默认）/ `low` |
+| `user_id` | **是** | **审计必传**（谁提交的）。**每次提交都必须带**：MCP 参数 `user_id`，或 HTTP 请求头 `X-Maxmcp-User-Id`（**二选一**；MCP 工具参数未传时自动兜底读该请求头）。只记录到任务日志与 Job 的 `user_id` 字段，**不参与鉴权**；都不带则 `user_id` 为 null、无法追溯提交者 |
 
 ## 标准流程
 
 ```
 1. workspace_upload <本地.max>          # 拿 local_path（绝对路径）
-2. submit_goskin_job(scene_local_path=...)   # → job_id
+2. submit_goskin_job(scene_local_path=..., user_id=<你的用户标识>)   # → job_id（user_id 必传）
 3. 轮询 get_goskin_job(job_id)              # 直到终态
 ```
 
@@ -44,12 +47,14 @@
 
 - **auto（默认）**：提交后全程不用管，轮询到 `succeeded`/`failed` 即可。
 - **manual**：看到 `awaiting_confirm` 后调 `confirm_goskin_job`；该状态下任务**继续持有实例租约**，有持有上限（默认 30min，超时自动 `cancelled`）。
+- **向用户展示 status_url（必做）**：提交成功返回的 `status_url`（`http://<host>/jobs/<id>/view?t=<token>`，**已含访问令牌**）**必须作为可点击链接放进你的回复**，并附一句说明——"打开可实时查看进度/排队位置，也可在页面上取消任务"。不要只回 job_id。
 - 轮询：MCP 工具往返自带延迟，多调几次 `get`/`list` 即可；没有服务端推送。
 - 取消：`queued`/`awaiting_confirm` 立即终态；`running` 在下一个安全点停止（executor 每步检查）。
 
 ## 权限与错误
 
 - 查询/取消/确认**只允许任务 owner（提交的 MCP 会话 / `X-Client-Id`）和管理员**（`MAXMCP_JOB_ADMIN_IDS`）。看别人的任务 → `JOB_PERMISSION_DENIED`。
+- 审计 user_id（**每次提交必带**）：`submit_goskin_job` 参数传 `user_id`（MCP），HTTP 提交带 `X-Maxmcp-User-Id` 请求头。**仅记录到任务日志/Job 字段**，供追踪"谁提交的"，不改变 owner；都不传则 `user_id` 为 null。
 - 结构化错误（同 instance-locks 约定，`retryable=false` 就**不要重试**）：
 
 | code | 含义 | 动作 |
@@ -70,7 +75,7 @@
 | `POST /jobs/{job_id}/cancel` | 取消 |
 | `POST /jobs/{job_id}/confirm` | manual 确认 |
 
-owner 取 `X-Client-Id` 请求头，缺失走匿名公共队列（上限 `MAXMCP_JOB_ANON_QUEUE_MAX`，默认 3）。
+owner 取 `X-Client-Id` 请求头，缺失走匿名公共队列（上限 `MAXMCP_JOB_ANON_QUEUE_MAX`，默认 3）。**每次提交必须同时带 `X-Maxmcp-User-Id` 头**做审计记录（写入任务日志/`user_id` 字段）。
 
 ## 队列专用实例（可选配置）
 

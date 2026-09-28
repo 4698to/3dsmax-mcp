@@ -2,7 +2,7 @@
 
 面向 **`3dsmax-mcp-remote`**（Agent 主机 A）。自动化 **自动蒙皮 / GoSkinning** 前请完整阅读。
 
-在 A 上只通过 **MCP 工具**或本 skill 的 `scripts/goskin_dev_flow.py` 驱动 B；**不要**在 A 上改 `max_instances.ini`、`import maxmcp` 或跑仓库 `dialog_monitor/_probe_*.py`。
+在 A 上只通过 **MCP 工具**驱动 B（自动蒙皮任务统一走 `submit_goskin_job` 队列，见 SKILL.md「批量任务队列」）；`scripts/goskin_dev_flow.py` 仅供低层 OCR 流程调试，**不用于任务提交**。**不要**在 A 上改 `max_instances.ini`、`import maxmcp` 或跑仓库 `dialog_monitor/_probe_*.py`。
 
 OCR / 实例表 / workspace 由 **MCP 服务器 B** 的运维配置；A 用 `check_dialog_ocr_health` 与 `list_instances` 探测即可。完整服务端与维护者说明见本地 skill 包中的同名文档（`3dsmax-mcp-dev`）。
 
@@ -71,7 +71,7 @@ Agent 磁盘上的 `.max`，Max 读不到。场景还没打开时必须先上传
 
 `save_as` 只认文件名。不要把这条用到 `load_scene`。场景已在 Max 里则跳过上传和加载。
 
-有本机 `.max` 时不要自己上传或 `load_scene`。只跑 `python goskin_dev_flow.py --url <mcp.json URL> --instance <name> --scene <本机.max>`。脚本在同一会话里上传、用 `local_path` 加载、再 `goskin_ensure_ready`。场景已打开则去掉 `--scene`。不要另写 `call('goskin_ensure_ready')`，也不要 `list_online_instances.py` 复查 busy。
+自动蒙皮任务统一走 `submit_goskin_job(scene_local_path=<上传的 local_path>)`（见 SKILL.md「批量任务队列」），**不要**自己跑 `goskin_dev_flow.py` 提交任务。本页以下脚本流程仅供**低层 OCR 流程调试**（验证菜单文字、点击参数）。
 
 ## 标准工作流
 

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import secrets
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -47,6 +48,11 @@ def new_job_id() -> str:
     return uuid.uuid4().hex
 
 
+def new_view_token() -> str:
+    """生成任务只读视图令牌（浏览器 URL 鉴权用，随 JSONL 持久化）。"""
+    return secrets.token_urlsafe(16)
+
+
 def priority_rank(priority: str) -> int:
     """出队排序权重（§6.2：high > normal > low）。"""
     return _PRIORITY_ORDER.get(priority, 1)
@@ -80,6 +86,7 @@ class Job:
 
     job_id: str
     owner: str
+    user_id: Optional[str] = None  # 审计记录：提交方显式声明的用户标识（不参与鉴权）
     status: str = JobStatus.QUEUED
     instance: Optional[str] = None
     scene_local_path: Optional[str] = None
@@ -88,6 +95,8 @@ class Job:
     bone_names: Optional[list[str]] = None
     confirm_mode: str = "auto"  # auto | manual
     priority: str = "normal"  # high | normal | low
+    view_token: Optional[str] = None  # 只读视图令牌（/jobs/{id}/view?t=）
+    debug: bool = False  # debug 模式：仅入队模拟，不发送到 Max 实例
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
@@ -112,6 +121,7 @@ class Job:
         return {
             "job_id": self.job_id,
             "owner": self.owner,
+            "user_id": self.user_id,
             "status": self.status,
             "instance": self.instance,
             "scene_local_path": self.scene_local_path,
@@ -120,6 +130,8 @@ class Job:
             "bone_names": self.bone_names,
             "confirm_mode": self.confirm_mode,
             "priority": self.priority,
+            "view_token": self.view_token,
+            "debug": self.debug,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -135,6 +147,7 @@ class Job:
         return cls(
             job_id=str(raw["job_id"]),
             owner=str(raw.get("owner", "")),
+            user_id=raw.get("user_id"),
             status=str(raw.get("status", JobStatus.QUEUED)),
             instance=raw.get("instance"),
             scene_local_path=raw.get("scene_local_path"),
@@ -143,6 +156,8 @@ class Job:
             bone_names=raw.get("bone_names"),
             confirm_mode=str(raw.get("confirm_mode", "auto")),
             priority=str(raw.get("priority", "normal")),
+            view_token=str(raw.get("view_token") or new_view_token()),
+            debug=bool(raw.get("debug", False)),
             created_at=float(raw.get("created_at", 0.0) or time.time()),
             started_at=raw.get("started_at"),
             finished_at=raw.get("finished_at"),

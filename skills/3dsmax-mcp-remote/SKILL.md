@@ -31,8 +31,7 @@ description: >-
 | Viewport screenshot | `capture_viewport` (+ download) — **no lease queue** if already holding or target busy; see below | `python capture_viewport_shot.py --out shot.png --no-acquire` when busy |
 | Upload file to workspace | `workspace_upload` / HTTP `/files/upload` | `python upload_to_mcp.py <path>` |
 | Load / save scene | `load_scene`, `manage_scene`, `save_as` | — (MCP tools only) |
-| GoSkin prepare (no 开始蒙皮) | do **not** call `goskin_*` yourself | `python goskin_dev_flow.py --instance <name> --scene <local.max>` |
-| GoSkin 批量任务（多人/排队） | `submit_goskin_job` + `get/list/cancel/confirm_goskin_job` | — (MCP tools only，见下) |
+| GoSkin 自动蒙皮（单次/批量/多人） | `submit_goskin_job` + `get/list/cancel/confirm_goskin_job`；**不要**自己调 `goskin_*` 工具、不要跑 `goskin_dev_flow.py` | — (MCP tools only，见下) |
 
 ### Viewport capture vs leases (avoid WAIT_TIMEOUT)
 
@@ -77,28 +76,34 @@ Path tips:
 - Do **not** use `action="save_as:/path"` — pass `file_path`/`path` as a separate argument.
 - Full catalog: [tool-reference.md](tool-reference.md) § Scene management. Leases: [instance-locks.md](instance-locks.md).
 
-## GoSkin：只跑 `goskin_dev_flow.py`
+## GoSkin：自动蒙皮统一走 `submit_goskin_job`
 
-不要自己选工具，不要先 `load_scene` 再写 `call('goskin_ensure_ready')`，也不要再用 `list_online_instances.py` 看 busy。一条命令、一个 MCP 会话做完：上传 → `load_scene(local_path)` → `goskin_ensure_ready` → `propose_skin_bones` → `goskin_run_skin`（不点「开始蒙皮」）。
+自动蒙皮**只能**用 `submit_goskin_job` 提交队列。不要自己选工具，不要先 `load_scene` 再写 `call('goskin_ensure_ready')`，也不要再用 `list_online_instances.py` 看 busy，更不要跑 `goskin_dev_flow.py`。一个工具入队：服务端自动排队 → 挑空闲实例（jobs/shared 池）→ 独占租约跑完整个 GoSkin 流程，Agent 只负责轮询终态。
 
-```bash
-python goskin_dev_flow.py --url <mcp.json 里的 URL> --instance <name> --scene <本机.max>
+```text
+workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user_id=<你的用户标识>)  →  轮询 get_goskin_job(job_id) 直到终态
 ```
 
-场景已经在 Max 里、用户没有给文件时，去掉 `--scene`。跑之前不要在 IDE 里 `acquire_instance`；若实例已被本对话占着，先在那个会话 `release_instance`（不卸载场景）再跑脚本。`--url` 必须等于 mcp.json，不要猜 localhost。
-
-`load_scene` 只用脚本拿到的 `local_path`。不要把上传结果里的 `url` 或文件名传进去。OCR 细节见 [references/goskin-ocr-click.md](references/goskin-ocr-click.md)。
+- **提交必须带 user_id（必做）**：每次 `submit_goskin_job` 都要传 `user_id=<你的用户标识>`（HTTP 提交则带 `X-Maxmcp-User-Id` 请求头），用于审计追踪提交者；不影响鉴权，不传则任务 `user_id` 为 null。
+- `confirm_mode="auto"`（默认）提交后全程自动；`manual` 停在 `awaiting_confirm` 需 `confirm_goskin_job` 放行。
+- `scene_local_path` 只传上传返回的 `local_path`，不要把 `url` 或文件名传进去。
+- **向用户展示 status_url（必做）**：提交成功返回的 `status_url` 已含访问令牌，**必须以可点击链接放进你的回复**并说明——打开可实时查看进度/排队位置、可在页面上取消任务；不要只回 job_id。
+- 提交前不要手动 `acquire_instance`，会和任务抢实例；查询/取消/确认仅本人 + 管理员。
+- 完整用法见下节「批量任务队列」及 [references/goskin-job-queue.md](references/goskin-job-queue.md)；OCR 细节见 [references/goskin-ocr-click.md](references/goskin-ocr-click.md)。
 
 ## 批量任务队列（GoSkin Job Queue）
 
 多人/批量提交自动蒙皮时**走队列，不要自己抢实例**：`submit_goskin_job` 提交后，服务端自动排队、挑空闲实例（jobs/shared 池）、独占租约跑完整个 GoSkin 流程，Agent 只负责轮询终态。
 
 ```text
-workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=...)  →  轮询 get_goskin_job(job_id)
+workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user_id=<你的用户标识>)  →  轮询 get_goskin_job(job_id)
 ```
 
 - `confirm_mode="auto"`（默认）：提交后全程自动，轮询到 `succeeded`/`failed` 即可。
 - `confirm_mode="manual"`：停在 `awaiting_confirm` 持租约等确认，需 `confirm_goskin_job` 放行（有 30min 持有上限）。
+- **提交必须带 user_id（必做）**：`submit_goskin_job` 传 `user_id`，HTTP 提交带 `X-Maxmcp-User-Id` 头。
+- 审计 user_id（**每次提交必带**）：`submit_goskin_job` 参数传 `user_id`（MCP），HTTP 提交带 `X-Maxmcp-User-Id` 请求头；只记录到任务日志与 Job 的 `user_id` 字段，用于追踪谁提交的，不影响 owner/鉴权。都不传则 `user_id` 为 null。
+- **向用户展示 status_url（必做）**：提交成功返回的 `status_url` 已含访问令牌，**必须以可点击链接放进你的回复**并说明——打开可实时查看进度/排队位置、可在页面上取消任务；不要只回 job_id。
 - 查询/取消/确认仅本人 + 管理员（`MAXMCP_JOB_ADMIN_IDS`）；别在提交前手动 `acquire_instance`，会和任务抢实例。
 - 5 个工具：`submit_goskin_job` / `get_goskin_job` / `list_goskin_jobs` / `cancel_goskin_job` / `confirm_goskin_job`；HTTP 等价 `POST /jobs` 等。完整用法见 [references/goskin-job-queue.md](references/goskin-job-queue.md)。
 

@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+- Added a shared GoSkin auto-skinning job queue: `submit_goskin_job` /
+  `get_goskin_job` / `list_goskin_jobs` / `cancel_goskin_job` /
+  `confirm_goskin_job` with priority + FIFO arbitration, exclusive
+  per-instance leases, read-only browser status pages (queue position,
+  live logs, cancel button, result downloads), a `debug` queue-only
+  simulated-success mode, and JSONL persistence with restart recovery.
+- Queue jobs accept an audit-only `user_id` (MCP tool argument or
+  `X-Maxmcp-User-Id` request header) recorded into the job log and the
+  job's `user_id` field, without affecting ownership/authorization.
+- GoSkin auto-skinning now routes exclusively through the queue tools;
+  `goskin_dev_flow.py` is retained for low-level OCR debugging only.
+
 ## [1.7.2] — 2026-09-15
 
 - Replaced `get_railclone_style_graph` with complete XML style read/write and generated-output tools for RailClone 7.3.5+.

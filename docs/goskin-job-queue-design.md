@@ -107,6 +107,7 @@ maxmcp/tools/jobs.py           # MCP 工具包装 + @mcp.custom_route("/jobs/*")
 |------|------|------|
 | `job_id` | str | UUID |
 | `owner` | str | 提交者标识：MCP session id，或 HTTP `X-Client-Id` |
+| `user_id` | str \| null | **审计**字段：提交方显式声明的用户标识（MCP 工具参数 / HTTP `X-Maxmcp-User-Id` 头），仅记录到任务日志与 Job 字段，**不参与 owner 鉴权** |
 | `instance` | str \| null | 指定实例名（如 `max-8765`）；null = 任取空闲 |
 | `scene_local_path` | str \| null | 已上传到 WORKSPACE_DIR 的 .max 绝对路径；null = 当前场景 |
 | `mesh_names` / `bone_names` | str[] \| null | 网格/骨骼名（可空，空则走 propose/unhidden 自动推导） |
@@ -331,6 +332,7 @@ jobs = max2, max3
 | `POST /jobs/{id}/confirm` | manual 模式确认「开始蒙皮」 |
 
 - `owner`：HTTP 侧取 `X-Client-Id` 头；缺失则视为"匿名公共队列"（受配额与 `MAXMCP_JOB_ANON_QUEUE_MAX` 约束）。跨用户查询/取消权限：仅本人 + `MAXMCP_JOB_ADMIN_IDS`（逗号分隔 client id）可全量。
+- 审计 `user_id`：提交方可额外带 `X-Maxmcp-User-Id` 头（MCP 工具则传 `user_id` 参数），**仅写入任务日志与 `Job.user_id`**，用于追踪谁提交的，不影响 owner。
 - 鉴权沿用现状（该服务无登录态），文档明示"内部工具，勿裸暴露公网"。
 
 ### 8.3 提交示例（HTTP）

@@ -46,6 +46,7 @@ from .job_model import (
     Job,
     JobStatus,
     new_job_id,
+    new_view_token,
     priority_rank,
 )
 from .job_store import DEFAULT_RETENTION_SECONDS, JobStore
@@ -154,6 +155,7 @@ class JobManager:
         admin_ids: Optional[list[str]] = None,
         ocr_base: Optional[str] = None,
         complete_timeout_s: Optional[float] = None,
+        debug_mode: Optional[bool] = None,
     ):
         self._store = store if store is not None else JobStore()
         # 并发上限：None = 在线实例数（§6.2）。
@@ -204,6 +206,9 @@ class JobManager:
         self._admin_ids = frozenset(
             _env_list("MAXMCP_JOB_ADMIN_IDS") if admin_ids is None else (admin_ids or [])
         )
+        self._debug_mode = (
+            _env_bool("MAXMCP_JOB_DEBUG", False) if debug_mode is None else bool(debug_mode)
+        )
         self._ocr_base = get_ocr_base() if ocr_base is None else ocr_base
         self._complete_timeout_s = float(
             DEFAULT_COMPLETE_TIMEOUT_S if complete_timeout_s is None else complete_timeout_s
@@ -251,6 +256,25 @@ class JobManager:
                 "auto_confirm": self._auto_confirm,
                 "ocr_base": self._ocr_base,
             }
+
+    def queue_context(self, job_id: str) -> dict[str, Any]:
+        """全局队列统计 + 指定任务（若仍在排队）的实时位置（§6.2 顺序）。"""
+        with self._lock:
+            counts = {JobStatus.QUEUED: 0, JobStatus.RUNNING: 0, JobStatus.AWAITING_CONFIRM: 0}
+            terminal = 0
+            for j in self._jobs.values():
+                if j.status in counts:
+                    counts[j.status] += 1
+                elif j.is_terminal():
+                    terminal += 1
+            position: Optional[int] = None
+            job = self._jobs.get(job_id)
+            if job is not None and job.status == JobStatus.QUEUED and not job.cancel_requested:
+                for i, cand in enumerate(self._queued_candidates_locked(time.time()), 1):
+                    if cand.job_id == job_id:
+                        position = i
+                        break
+            return {"counts": counts, "terminal": terminal, "position": position}
 
     # ------------------------------------------------------------------ #
     # 生命周期（§6.4）
@@ -335,6 +359,7 @@ class JobManager:
         self,
         owner: Optional[str] = None,
         *,
+        user_id: Optional[str] = None,
         scene_local_path: Optional[str] = None,
         instance: Optional[str] = None,
         mesh_names: Optional[list[str]] = None,
@@ -342,8 +367,10 @@ class JobManager:
         confirm_mode: Optional[str] = None,
         priority: str = "normal",
         preserve_scene: bool = False,
+        debug: Optional[bool] = None,
     ) -> Job:
         owner = owner or ""
+        user_id = (user_id or "").strip() or None
         with self._lock:
             if priority not in VALID_PRIORITIES:
                 raise ValueError(f"priority 必须是 {VALID_PRIORITIES} 之一，收到 {priority!r}")
@@ -384,7 +411,12 @@ class JobManager:
                 bone_names=list(bone_names) if bone_names else None,
                 confirm_mode=confirm_mode,
                 priority=priority,
+                view_token=new_view_token(),
+                debug=debug if debug is not None else self._debug_mode,
+                user_id=user_id,
             )
+            if user_id:
+                job.add_log("submit", f"提交者 user_id={user_id}")
             job.queue_position = (
                 sum(1 for j in self._jobs.values() if j.status == JobStatus.QUEUED) + 1
             )
@@ -437,13 +469,14 @@ class JobManager:
         job_id: str,
         requester: Optional[str] = None,
         is_admin: bool = False,
+        view_token_ok: bool = False,
     ) -> dict[str, Any]:
         requester = requester or ""
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
                 raise JobNotFoundError(f"任务不存在: {job_id}")
-            if not (is_admin or requester == job.owner):
+            if not (is_admin or requester == job.owner or view_token_ok):
                 raise JobPermissionError("只能取消自己的任务（或由管理员操作）")
             if job.is_terminal():
                 return {"ok": True, "status": job.status, "already_terminal": True}
@@ -549,6 +582,11 @@ class JobManager:
             _log.warning("job %s hold expired -> cancelled", job_id)
 
     def _try_dispatch_locked(self, now: float) -> None:
+        # debug 任务不依赖在线实例：先全部模拟完成，再正常调度。
+        for job in self._queued_candidates_locked(now):
+            if job.debug:
+                self._complete_debug_locked(job)
+            # 非 debug 任务留给下面主循环处理。
         instances = manager.list_instances()
         usable = [
             i
@@ -628,6 +666,25 @@ class JobManager:
                 len(self._workers),
                 cap,
             )
+
+    def _complete_debug_locked(self, job: Job) -> None:
+        """debug 模式：仅入队模拟，不发送到 Max 实例，直接标记成功。"""
+        now = time.time()
+        job.status = JobStatus.SUCCEEDED
+        job.finished_at = now
+        self._store.set_status(job.job_id, JobStatus.SUCCEEDED, at=now)
+        result = {
+            "ok": True,
+            "status": JobStatus.SUCCEEDED,
+            "code": "debug",
+            "error": None,
+            "message": "debug 模式：任务仅入队模拟，未发送到 Max 实例",
+        }
+        job.result = result
+        self._store.set_result(job.job_id, result)
+        job.add_log("scheduler", "debug 模式：仅入队模拟，未发送到 Max 实例", "warn")
+        self._store.append_log(job.job_id, job.log[-1])
+        _log.info("job %s completed in debug mode (not dispatched)", job.job_id)
 
     def _queued_candidates_locked(self, now: float) -> list[Job]:
         candidates: list[Job] = []

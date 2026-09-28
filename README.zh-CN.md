@@ -5,7 +5,7 @@
 用中文描述你要做的事，智能体通过专用 MCP 工具直接操作场景——创建物体、构建材质、驱动修改器与控制器、
 截取视口、检查插件。progressive 配置只公开三个发现/调用工具，再按需加载完整工具定义，避免一次性占用大量上下文。
 
-**当前版本：1.6.7** — 见 [CHANGELOG.md](docs/CHANGELOG.md)。
+**当前版本：1.7.2** — 见 [CHANGELOG.md](docs/CHANGELOG.md)。
 
 > English: [README.md](README.md)
 
@@ -18,6 +18,7 @@
 - **多人共享与多实例** — 一台共享服务器对接多台 3ds Max；公共 Agent 通过有界 FIFO 短租约队列获取实例，空闲 TTL / 断线自动释放（队列满硬背压）
 - **深度插件支持** — tyFlow、Data Channel、MCG、OSL、Forest Pack、RailClone、Octane
 - **对话框 OCR 点击** — 对无 HWND 的 Qt 插件窗（如自动蒙皮 GoSkin）截图 → 外部 OCR → 按文字模拟鼠标点击
+- **GoSkin 批量任务队列（Unreleased）** — 自动蒙皮统一走 `submit_goskin_job` 提交共享队列：优先级 + FIFO 仲裁、独占租约自动跑完整流程、浏览器状态页实时看排队位置/日志并可取消、JSONL 持久化重启恢复、`debug` 只入队不发送；提交带审计 `user_id`（MCP 参数 / `X-Maxmcp-User-Id` 请求头）
 - **内置智能体技能包** — **远程** `3dsmax-mcp-remote`（默认，给 A：文档 + HTTP 辅助脚本）；**本地** `3dsmax-mcp-dev`（维护者文档）。运行 `build_skill_package.bat`（或 `remote` / `local` / `both`）。给 A 拷 `dist/3dsmax-mcp-remote/`。见 [docs/ADVANCED.md](docs/ADVANCED.md#agent-skill)
 
 ## 环境要求
@@ -435,7 +436,22 @@ Max 窗口必须**可见且未最小化**。旧版（如 2015）TCP Bridge 走 `
 | `check_dialog_ocr_health` / `recognize_plugin_dialog` / `click_plugin_dialog_button` | 通用对话框 OCR 与点击 |
 | `get_max_window_state` / `restore_max_window` | 读/还原 Max 主窗口（最小化时视口抓图会变成 16×16） |
 
-OCR 服务基址配置（优先级从高到低）：
+### 批量任务队列（自动蒙皮统一入口）
+
+自动蒙皮**统一走队列**：`submit_goskin_job` 提交后服务端自动排队、挑空闲实例（jobs/shared 池）、独占租约跑完整个 GoSkin 流程，Agent 只轮询终态。**不要再手动 `acquire_instance` 抢实例**，也不要跑 `goskin_dev_flow.py`（仅供低层 OCR 调试）。
+
+| 工具 | 作用 |
+|------|------|
+| `submit_goskin_job` | 提交任务（唯一入口）；返回 `job_id` / 排队位置 / `status_url` |
+| `get_goskin_job` / `list_goskin_jobs` | 查单个 / 列自己的任务（`status`/`limit`/`offset` 过滤） |
+| `cancel_goskin_job` / `confirm_goskin_job` | 取消 / manual 模式点「开始蒙皮」放行 |
+
+- **浏览器状态页**：提交返回的 `status_url`（已含只读令牌）展示基础任务信息、实时排队位置、任务日志、取消按钮与结果下载链接。
+- `debug=true` 只入队并模拟成功，不发送到 Max 实例；`confirm_mode="manual"` 停在 `awaiting_confirm` 等待确认（有持有上限，超时自动取消）。
+- **审计 user_id**：MCP 提交传 `user_id` 参数，HTTP 提交带 `X-Maxmcp-User-Id` 请求头；只记录到任务日志与 Job 的 `user_id` 字段，**不参与鉴权**。查询/取消/确认仍按 owner（MCP 会话 / `X-Client-Id`）与管理员（`MAXMCP_JOB_ADMIN_IDS`）校验。
+- HTTP 等价路由：`POST /jobs`、`GET /jobs`、`GET /jobs/{id}`、`POST /jobs/{id}/cancel`、`POST /jobs/{id}/confirm`；任务持久化在 `%LOCALAPPDATA%\3dsmax-mcp\jobs\{job_id}.jsonl`（默认保留 7 天，重启自动恢复）。
+
+### OCR 服务基址配置（优先级从高到低）
 
 1. 工具参数 `ocr_base`  
 2. 环境变量 `MAXMCP_OCR_BASE`  
@@ -498,7 +514,7 @@ core/full 仍可用于需要一次性公开全部参数的旧客户端。
 
 **重要操作审计日志**
 破坏性 / 确认门 / 实例租约 / 加载渲染等工具调用会写入 `%TEMP%/3dsmax-mcp/audit/YYYYMMDD.jsonl`。
-`tools/call` 的 `arguments` 可附带可选 `user_id`（不在各工具 schema 中），日志还会记录 `date` 与当前 `scene_path`。
+`tools/call` 的 `arguments` 可附带可选 `user_id`（不在各工具 schema 中），也可在请求头带 `X-Maxmcp-User-Id`；日志还会记录 `date` 与当前 `scene_path`。
 详见 [docs/AUDIT.md](docs/AUDIT.md)；`get_file_service_info` 返回 `audit` 路径说明。用 `MAXMCP_AUDIT=0` 关闭。
 
 **能自己加工具吗**
