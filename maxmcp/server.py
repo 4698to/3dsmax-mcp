@@ -191,6 +191,14 @@ _READ_ONLY_TOOLS = {
     "mcg_search_operators",
 }
 
+# Pure instance-registry queries that never send commands to a Max instance.
+# They must skip session-routed client wiring, or single-instance auto-bind
+# would mark the instance busy and hold a lease just for a read-only query.
+_INSTANCE_REGISTRY_QUERIES = {
+    "list_instances",
+    "get_my_instance",
+}
+
 _DESTRUCTIVE_TOOLS = {
     "mesh_edit",
     "scene_patch",
@@ -312,10 +320,11 @@ def _install_structured_tool_results() -> None:
         if decorator_args and callable(decorator_args[0]) and len(decorator_args) == 1 and not decorator_kwargs:
             fn = decorator_args[0]
             annotations = _tool_annotations(getattr(fn, "__name__", "") or "")
+            no_client = getattr(fn, "__name__", "") in _INSTANCE_REGISTRY_QUERIES
             wrapped = make_structured_tool(
                 fn,
-                before_call=client.clear_last_response,
-                transport_provider=client.get_last_transport,
+                before_call=None if no_client else client.clear_last_response,
+                transport_provider=None if no_client else client.get_last_transport,
             )
             _register_raw_tool(registration_tool(fn), wrapped, annotations)
             return fn
@@ -328,10 +337,11 @@ def _install_structured_tool_results() -> None:
                 decorator_kwargs,
                 annotations,
             )
+            no_client = getattr(fn, "__name__", "") in _INSTANCE_REGISTRY_QUERIES
             wrapped = make_structured_tool(
                 fn,
-                before_call=client.clear_last_response,
-                transport_provider=client.get_last_transport,
+                before_call=None if no_client else client.clear_last_response,
+                transport_provider=None if no_client else client.get_last_transport,
             )
             raw_decorator(wrapped)
             return fn
