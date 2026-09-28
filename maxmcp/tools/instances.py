@@ -28,6 +28,7 @@ from ..instance_manager import (
     InstanceBusyError,
     InstanceError,
     InstanceNotAcquiredError,
+    InstanceReservedError,
     NoFreeInstanceError,
     QueueFullError,
     manager,
@@ -136,6 +137,11 @@ def acquire_instance(
     except NoFreeInstanceError as exc:
         return json.dumps(
             manager.reject_payload("NO_FREE_INSTANCE", str(exc), retryable=True),
+            ensure_ascii=False,
+        )
+    except InstanceReservedError as exc:
+        return json.dumps(
+            manager.reject_payload("INSTANCE_RESERVED", str(exc), retryable=False),
             ensure_ascii=False,
         )
     except InstanceError as exc:

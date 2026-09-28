@@ -32,6 +32,7 @@ description: >-
 | Upload file to workspace | `workspace_upload` / HTTP `/files/upload` | `python upload_to_mcp.py <path>` |
 | Load / save scene | `load_scene`, `manage_scene`, `save_as` | — (MCP tools only) |
 | GoSkin prepare (no 开始蒙皮) | do **not** call `goskin_*` yourself | `python goskin_dev_flow.py --instance <name> --scene <local.max>` |
+| GoSkin 批量任务（多人/排队） | `submit_goskin_job` + `get/list/cancel/confirm_goskin_job` | — (MCP tools only，见下) |
 
 ### Viewport capture vs leases (avoid WAIT_TIMEOUT)
 
@@ -88,6 +89,19 @@ python goskin_dev_flow.py --url <mcp.json 里的 URL> --instance <name> --scene 
 
 `load_scene` 只用脚本拿到的 `local_path`。不要把上传结果里的 `url` 或文件名传进去。OCR 细节见 [references/goskin-ocr-click.md](references/goskin-ocr-click.md)。
 
+## 批量任务队列（GoSkin Job Queue）
+
+多人/批量提交自动蒙皮时**走队列，不要自己抢实例**：`submit_goskin_job` 提交后，服务端自动排队、挑空闲实例（jobs/shared 池）、独占租约跑完整个 GoSkin 流程，Agent 只负责轮询终态。
+
+```text
+workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=...)  →  轮询 get_goskin_job(job_id)
+```
+
+- `confirm_mode="auto"`（默认）：提交后全程自动，轮询到 `succeeded`/`failed` 即可。
+- `confirm_mode="manual"`：停在 `awaiting_confirm` 持租约等确认，需 `confirm_goskin_job` 放行（有 30min 持有上限）。
+- 查询/取消/确认仅本人 + 管理员（`MAXMCP_JOB_ADMIN_IDS`）；别在提交前手动 `acquire_instance`，会和任务抢实例。
+- 5 个工具：`submit_goskin_job` / `get_goskin_job` / `list_goskin_jobs` / `cancel_goskin_job` / `confirm_goskin_job`；HTTP 等价 `POST /jobs` 等。完整用法见 [references/goskin-job-queue.md](references/goskin-job-queue.md)。
+
 ## Tool Profile Routing
 
 - **Verify before you route.** Check the actual `tools/list` surface first; never assume a profile from docs alone.
@@ -127,6 +141,7 @@ Open only the file needed for the current task (one level from this index):
 | MAXScript / OSL gotchas | [maxscript-pitfalls.md](maxscript-pitfalls.md) |
 | HTTP MCP handshake, upload/download, CJK | [remote-http-mcp.md](remote-http-mcp.md) |
 | Auto GoSkin OCR click flow | [goskin-ocr-click.md](goskin-ocr-click.md) |
+| GoSkin 批量任务队列（多人/排队） | [goskin-job-queue.md](goskin-job-queue.md) |
 | Curves / loft recipes | [curve-construction.md](curve-construction.md) |
 | tyFlow graphs | [tyflow-graphs.md](tyflow-graphs.md) |
 | Data Channel / MCG | [procedural-graphs.md](procedural-graphs.md) |

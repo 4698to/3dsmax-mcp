@@ -1,0 +1,85 @@
+# GoSkin 批量任务队列（Job Queue）
+
+> 服务端 B 的**任务仲裁层**（`maxmcp/jobs/`，设计文档 `docs/goskin-job-queue-design.md`）。
+> 多人/批量提交自动蒙皮时**优先走队列**，不要各自 `acquire_instance` 抢实例。
+
+## 什么时候用队列，什么时候用 `goskin_dev_flow.py`
+
+| 场景 | 用 |
+|------|-----|
+| 一次提交一个任务，且要尽快独占一个实例跑完（交互式） | `goskin_dev_flow.py`（单会话） |
+| 多用户并发提交 / 批量文件排队 / 不想自己管实例租约 | **队列工具（本页）** |
+
+队列的核心承诺：提交后服务端**自动排队、自动挑空闲实例（jobs/shared 池）、自动跑完整 GoSkin 流程**，Agent 只需轮询终态。**不要在队列任务上自己 `acquire_instance`**——实例由服务端 worker 独占租给任务，你手动 acquire 会互相卡死（`INSTANCE_BUSY`）。
+
+## 工具速查（5 个）
+
+| 工具 | 用途 | 关键返回 |
+|------|------|----------|
+| `submit_goskin_job` | 提交任务（唯一入口） | `{job_id, status=queued, queue_position, confirm_mode}` |
+| `get_goskin_job` | 查单个：状态/日志尾/结果 | `{status, log[], result, error}` |
+| `list_goskin_jobs` | 列自己的任务（`status`/`limit`/`offset` 过滤） | `{jobs[], count}` |
+| `cancel_goskin_job` | 取消（自己或管理员） | `{ok, status}` |
+| `confirm_goskin_job` | manual 模式点「开始蒙皮」放行 | `{ok, status=running}` |
+
+## 提交参数
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `scene_local_path` | 否 | 上传后拿到的本地路径；**省略 = 用被分配实例的当前场景** |
+| `instance` | 否 | 钉到指定实例（必须是 `shared`/`jobs` 池；`interactive` 池会被拒 `INSTANCE_RESERVED`）。省略 = 服务端任选空闲 |
+| `mesh_names` / `bone_names` | 否 | 省略 = 自动解析场景里未隐藏的网格/骨骼 |
+| `confirm_mode` | 否 | `auto`（默认，服务端自动点「开始蒙皮」）或 `manual`（停在 `awaiting_confirm` 等人确认） |
+| `priority` | 否 | `high` / `normal`（默认）/ `low` |
+
+## 标准流程
+
+```
+1. workspace_upload <本地.max>          # 拿 local_path（绝对路径）
+2. submit_goskin_job(scene_local_path=...)   # → job_id
+3. 轮询 get_goskin_job(job_id)              # 直到终态
+```
+
+状态机：`queued → running → succeeded | failed | cancelled`；manual 模式多一个 `running → awaiting_confirm → running`（确认后自动跑完）。
+
+- **auto（默认）**：提交后全程不用管，轮询到 `succeeded`/`failed` 即可。
+- **manual**：看到 `awaiting_confirm` 后调 `confirm_goskin_job`；该状态下任务**继续持有实例租约**，有持有上限（默认 30min，超时自动 `cancelled`）。
+- 轮询：MCP 工具往返自带延迟，多调几次 `get`/`list` 即可；没有服务端推送。
+- 取消：`queued`/`awaiting_confirm` 立即终态；`running` 在下一个安全点停止（executor 每步检查）。
+
+## 权限与错误
+
+- 查询/取消/确认**只允许任务 owner（提交的 MCP 会话 / `X-Client-Id`）和管理员**（`MAXMCP_JOB_ADMIN_IDS`）。看别人的任务 → `JOB_PERMISSION_DENIED`。
+- 结构化错误（同 instance-locks 约定，`retryable=false` 就**不要重试**）：
+
+| code | 含义 | 动作 |
+|------|------|------|
+| `JOB_NOT_FOUND` | job_id 不存在 | 检查 id |
+| `JOB_QUOTA_EXCEEDED` | 每提交者排队上限（默认 5） | 先取消/等跑完 |
+| `JOB_PERMISSION_DENIED` | 非 owner/非管理员 | 不重试 |
+| `JOB_STATE` | 状态不允许该操作（如重复 confirm） | 按返回的状态走 |
+| `INSTANCE_RESERVED` | 指定的实例属于 interactive 池 | 换实例或不指定 |
+
+## HTTP 等价路由（有 `MAXMCP_URL` 时）
+
+| 方法/路径 | 说明 |
+|-----------|------|
+| `POST /jobs` | multipart：`file`=场景 + `params`=JSON（其余提交参数） |
+| `GET /jobs?status=&owner=&limit=&offset=` | 列表（非管理员强制只看自己的） |
+| `GET /jobs/{job_id}` | 详情 |
+| `POST /jobs/{job_id}/cancel` | 取消 |
+| `POST /jobs/{job_id}/confirm` | manual 确认 |
+
+owner 取 `X-Client-Id` 请求头，缺失走匿名公共队列（上限 `MAXMCP_JOB_ANON_QUEUE_MAX`，默认 3）。
+
+## 队列专用实例（可选配置）
+
+- `[pools] jobs=`（`max_instances.ini`）或 `MAXMCP_JOB_INSTANCES` 可声明**只服务队列任务**的 Max 实例，交互会话不可占用它们。
+- `list_instances` 会显示 `pool`（`shared`/`jobs`/`interactive`）与 `lease_kind`；`MAXMCP_JOB_USE_SHARED=false` 时队列严格只用 jobs 池。
+
+## 常见陷阱
+
+- 别在提交前自己 `acquire_instance` 再等任务——任务和你的会话抢同一实例。
+- 传 `scene_local_path` 时用**上传返回的 `local_path`**，不是 URL、不是文件名。
+- `confirm_goskin_job` 只对 `awaiting_confirm` 有效，`auto` 任务重复确认会 `JOB_STATE`。
+- 队列空时 jobs 池实例在 `list_instances` 显示 `busy=false` 但交互会话仍不可用，属正常。

@@ -400,6 +400,7 @@ CORE_TOOL_MODULES = (
     "files",
     "open_scene",
     "instances",
+    "jobs",
     "learning",
     "controllers",
     "keyframes",
@@ -593,11 +594,17 @@ def main():
     # Default: stdio (used by MCP clients such as Claude Desktop / Cursor).
     # Set MCP_TRANSPORT=streamable-http to serve over HTTP; bind address and
     # port come from MCP_HTTP_HOST / MCP_HTTP_PORT (see FastMCP settings above).
+    from .jobs import job_manager
+
+    job_manager.start()  # GoSkin 任务队列调度器（docs/goskin-job-queue-design.md §6.4）
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
-    if transport == "streamable-http":
-        mcp.run(transport="streamable-http")
-    else:
-        mcp.run(transport="stdio")
+    try:
+        if transport == "streamable-http":
+            mcp.run(transport="streamable-http")
+        else:
+            mcp.run(transport="stdio")
+    finally:
+        job_manager.stop()
 
 
 if __name__ == "__main__":

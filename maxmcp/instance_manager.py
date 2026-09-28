@@ -70,6 +70,8 @@ ENV_ACQUIRE_WAIT = "MAXMCP_ACQUIRE_WAIT_SECONDS"
 ENV_ACQUIRE_QUEUE_MAX = "MAXMCP_ACQUIRE_QUEUE_MAX"
 ENV_RESET_ON_ACQUIRE = "MAXMCP_RESET_ON_ACQUIRE"
 ENV_REGISTRY = "MAXMCP_REGISTRY"
+ENV_JOB_INSTANCES = "MAXMCP_JOB_INSTANCES"
+ENV_INTERACTIVE_INSTANCES = "MAXMCP_INTERACTIVE_INSTANCES"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 # Idle lease: no tool activity for this long -> auto-release (public multi-agent default).
@@ -126,6 +128,14 @@ class AcquireWaitTimeoutError(InstanceError):
     """Timed out waiting for an idle instance."""
 
 
+class InstanceReservedError(InstanceError):
+    """The named instance belongs to a pool not usable for this acquire kind.
+
+    E.g. an interactive session asking for a jobs-only instance, or a job
+    asking for an interactive-only instance. Not retryable on the same name.
+    """
+
+
 @dataclass
 class _AcquireWaiter:
     """One FIFO wait-queue entry for a session blocked in acquire()."""
@@ -136,6 +146,7 @@ class _AcquireWaiter:
     event: threading.Event
     enqueued_at: float
     position: int = 0
+    for_job: bool = False
     result: Optional[MaxClient] = None
     error: Optional[BaseException] = None
     scene_reset: bool = False
@@ -160,6 +171,8 @@ class IMaxInstance:
     native_online: Optional[bool] = None
     online_error: Optional[str] = None
     online_checked_at: Optional[float] = None  # time.monotonic()
+    lease_kind: str = "session"  # "session" (interactive) | "job" (queue worker)
+    pool: str = "shared"  # "shared" | "jobs" | "interactive"
 
 
 def _probe_tcp(host: str, port: int, timeout: float = PROBE_TIMEOUT) -> tuple[bool, str]:
@@ -367,6 +380,51 @@ def _discover_instances_file() -> tuple[Optional[Path], list[tuple[str, int, str
     return None, []
 
 
+def _load_pools_from_ini(path: Path) -> dict[str, str]:
+    """Read ``[pools]`` section: ``jobs = max2, max3`` / ``interactive = max4``.
+
+    Keys map an instance name to its pool. Entries without a pool label stay
+    in the default ``shared`` pool. Unknown instance names are reported by the
+    caller. Never raises; malformed files simply yield no pools.
+    """
+    parser = configparser.ConfigParser()
+    parser.optionxform = str  # preserve instance name casing
+    pools: dict[str, str] = {}
+    try:
+        read_ok = parser.read(path, encoding="utf-8")
+    except (OSError, configparser.Error, UnicodeError) as exc:
+        logging.warning("Could not read pools config %s: %s", path, exc)
+        return pools
+    if not read_ok or not parser.has_section("pools"):
+        return pools
+    for pool_name in ("jobs", "interactive"):
+        if not parser.has_option("pools", pool_name):
+            continue
+        raw = parser.get("pools", pool_name)
+        for name in (n.strip() for n in raw.replace(";", ",").split(",")):
+            if name:
+                pools[name] = pool_name
+    return pools
+
+
+def _env_pools() -> dict[str, str]:
+    """Parse MAXMCP_JOB_INSTANCES / MAXMCP_INTERACTIVE_INSTANCES to name->pool."""
+    pools: dict[str, str] = {}
+    for raw, pool in (
+        (os.environ.get(ENV_JOB_INSTANCES), "jobs"),
+        (os.environ.get(ENV_INTERACTIVE_INSTANCES), "interactive"),
+    ):
+        if not (raw and raw.strip()):
+            continue
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            name = entry.rsplit(":", 1)[-1] if ":" in entry else entry
+            pools[name] = pool
+    return pools
+
+
 class InstanceManager:
     """Thread-safe registry of 3ds Max instances with per-session short leases."""
 
@@ -400,6 +458,7 @@ class InstanceManager:
         self._clients: dict[str, MaxClient] = {}
         self._by_session: dict[object, str] = {}  # session object -> instance name
         self._wait_queue: list[_AcquireWaiter] = []
+        self._job_sessions: set[object] = set()  # worker sessions running queue jobs
         self._auto_bind = False  # single-instance fallback binds implicitly
         env_spec = os.environ.get(ENV_INSTANCES)
         # Explicit env/constructor OR a populated max_instances.ini -> never
@@ -606,6 +665,7 @@ class InstanceManager:
                         raise ValueError(f"Invalid port {port_str!r} for instance {name!r}")
                     entries.append((host, port, name, versions.get(port)))
                 self._build(entries, pinned=True)
+                self._apply_pools_locked(_env_pools())
                 self._merge_registry_locked()
                 return
 
@@ -620,6 +680,8 @@ class InstanceManager:
                     file_path or INSTANCES_INI_NAME,
                 )
                 self._build(built, pinned=True)
+                pools = {**_load_pools_from_ini(file_path), **_env_pools()}
+                self._apply_pools_locked(pools)
                 self._merge_registry_locked()
                 return
 
@@ -640,6 +702,25 @@ class InstanceManager:
                     pinned=False,
                 )
                 self._auto_bind = True
+
+    def _apply_pools_locked(self, pools: dict[str, str]) -> None:
+        """Label configured instances with their pool (default shared).
+
+        Also called by _load before the registry merge; pinned instances keep
+        their pool across registry refreshes. Caller holds self._lock.
+        """
+        for name, pool in pools.items():
+            inst = self._find(name)
+            if inst is None:
+                logging.warning(
+                    "Pool config references unknown instance %r; ignored",
+                    name,
+                )
+                continue
+            if pool not in ("shared", "jobs", "interactive"):
+                logging.warning("Unknown pool %r for instance %r; ignored", pool, name)
+                continue
+            inst.pool = pool
 
     def _find(self, name: str) -> Optional[IMaxInstance]:
         return next((i for i in self._instances if i.name == name), None)
@@ -876,6 +957,8 @@ class InstanceManager:
         stale_names: list[str] = []
         for inst in self._instances:
             if inst.locked_by and inst.locked_at and (now - inst.locked_at) > self._lock_ttl:
+                if inst.locked_by in self._job_sessions:
+                    continue  # queue job mid-run: TTL exempt until job ends
                 logging.warning(
                     "Instance %s idle lease held by session %s exceeded TTL; releasing",
                     inst.name,
@@ -915,13 +998,21 @@ class InstanceManager:
             except Exception:  # keep sweeping on transient errors
                 continue
 
-    def _pick_idle_locked(self, name: Optional[str]) -> IMaxInstance:
-        """Return an idle instance or raise. Caller holds self._lock."""
+    def _pick_idle_locked(self, name: Optional[str], *, for_job: bool = False) -> IMaxInstance:
+        """Return an idle instance or raise. Caller holds self._lock.
+
+        Pool rules: job acquires may use {jobs, shared}, interactive acquires
+        may use {shared, interactive}. A named instance from the wrong pool
+        raises InstanceReservedError; picking "any" scans the usable pools in
+        preference order (jobs first for jobs, shared first for interactive).
+        """
         if not self._instances:
             raise NoFreeInstanceError(
                 "No 3ds Max instances discovered. Make sure the 3ds Max MCP "
                 "server script is running in at least one 3ds Max instance."
             )
+
+        usable = ("jobs", "shared") if for_job else ("shared", "interactive")
 
         if name:
             inst = self._find(name)
@@ -929,6 +1020,11 @@ class InstanceManager:
                 raise InstanceError(
                     f"Unknown instance {name!r}. Configured: "
                     f"{[i.name for i in self._instances]}"
+                )
+            if inst.pool not in usable:
+                raise InstanceReservedError(
+                    f"Instance {name!r} belongs to pool {inst.pool!r}, which is "
+                    f"not usable for {'job' if for_job else 'interactive'} work"
                 )
             if inst.locked_by:
                 raise InstanceBusyError(
@@ -942,23 +1038,25 @@ class InstanceManager:
                 )
             return inst
 
+        def _first_idle(online_rule) -> Optional[IMaxInstance]:
+            for pool in usable:
+                inst = next(
+                    (i for i in self._instances if i.pool == pool and not i.locked_by and online_rule(i)),
+                    None,
+                )
+                if inst is not None:
+                    return inst
+            return None
+
         # Prefer reachable idle instances; fall back to unknown (not yet probed).
-        inst = next(
-            (i for i in self._instances if not i.locked_by and i.online is True),
-            None,
-        )
+        inst = _first_idle(lambda i: i.online is True)
         if inst is None:
-            inst = next(
-                (
-                    i
-                    for i in self._instances
-                    if not i.locked_by and i.online is not False
-                ),
-                None,
-            )
+            inst = _first_idle(lambda i: i.online is not False)
         if inst is None:
             raise NoFreeInstanceError(
-                "No online idle 3ds Max instance available: "
+                "No online idle 3ds Max instance available"
+                + (" for job use" if for_job else "")
+                + ": "
                 + ", ".join(
                     (
                         f"{i.name}({'busy' if i.locked_by else 'offline' if i.online is False else 'idle'})"
@@ -969,11 +1067,12 @@ class InstanceManager:
         return inst
 
     def _grant_locked(
-        self, session: object, inst: IMaxInstance
+        self, session: object, inst: IMaxInstance, *, for_job: bool = False
     ) -> MaxClient:
         """Bind session to inst. Caller holds self._lock."""
         inst.locked_by = session
         inst.locked_at = time.monotonic()
+        inst.lease_kind = "job" if for_job else "session"
         self._by_session[session] = inst.name
         logging.info(
             "Session %s acquired instance %s (%s:%s)",
@@ -1021,7 +1120,7 @@ class InstanceManager:
             if waiter.cancelled:
                 continue
             try:
-                inst = self._pick_idle_locked(waiter.name)
+                inst = self._pick_idle_locked(waiter.name, for_job=waiter.for_job)
             except InstanceBusyError:
                 remaining.append(waiter)
                 continue
@@ -1030,11 +1129,21 @@ class InstanceManager:
                 # Later waiters wanting "any" also cannot proceed; named ones
                 # for other instances might, so keep scanning.
                 continue
+            except InstanceReservedError:
+                # Named instance is in the wrong pool; nothing will change by
+                # waiting, so fail this waiter immediately.
+                waiter.error = InstanceReservedError(
+                    f"Instance {waiter.name!r} is reserved for another pool"
+                )
+                waiter.event.set()
+                continue
             except InstanceError as exc:
                 waiter.error = exc
                 waiter.event.set()
                 continue
-            waiter.result = self._grant_locked(waiter.session, inst)
+            waiter.result = self._grant_locked(
+                waiter.session, inst, for_job=waiter.for_job
+            )
             waiter.scene_reset = waiter.reset_scene
             waiter.event.set()
         self._wait_queue = remaining
@@ -1061,6 +1170,7 @@ class InstanceManager:
         name: Optional[str],
         *,
         reset_scene: bool,
+        for_job: bool = False,
     ) -> tuple[Optional[MaxClient], bool]:
         """Immediate acquire attempt. Returns (client, scene_reset_pending)."""
         hide_names: list[str] = []
@@ -1077,19 +1187,19 @@ class InstanceManager:
                     self._dispatch_waiters_locked()
                     hide_names.append(held)
                     try:
-                        inst = self._pick_idle_locked(name)
+                        inst = self._pick_idle_locked(name, for_job=for_job)
                     except (InstanceBusyError, NoFreeInstanceError):
                         result = (None, False)
                     else:
-                        client = self._grant_locked(session, inst)
+                        client = self._grant_locked(session, inst, for_job=for_job)
                         result = (client, reset_scene)
             else:
                 try:
-                    inst = self._pick_idle_locked(name)
+                    inst = self._pick_idle_locked(name, for_job=for_job)
                 except (InstanceBusyError, NoFreeInstanceError):
                     result = (None, False)
                 else:
-                    client = self._grant_locked(session, inst)
+                    client = self._grant_locked(session, inst, for_job=for_job)
                     result = (client, reset_scene)
         for n in hide_names:
             self._hide_agent_banner(n)
@@ -1102,6 +1212,7 @@ class InstanceManager:
         *,
         wait: bool = True,
         reset_scene: Optional[bool] = None,
+        for_job: bool = False,
     ) -> MaxClient:
         """Bind session to a free instance and return its client.
 
@@ -1110,13 +1221,16 @@ class InstanceManager:
         QueueFullError / AcquireWaitTimeoutError / NoFreeInstanceError /
         InstanceBusyError on failure.
 
+        ``for_job`` restricts pool selection: jobs use {jobs, shared} while
+        interactive acquires use {shared, interactive}.
+
         Idempotent: a session that already holds an instance keeps it. When a
         specific name is given and the session holds a different instance, the
         session switches: its current instance is released first, then the
         named one is acquired (if free).
         """
         client, _meta = self.acquire_with_meta(
-            session, name, wait=wait, reset_scene=reset_scene
+            session, name, wait=wait, reset_scene=reset_scene, for_job=for_job
         )
         return client
 
@@ -1127,6 +1241,7 @@ class InstanceManager:
         *,
         wait: bool = True,
         reset_scene: Optional[bool] = None,
+        for_job: bool = False,
     ) -> tuple[MaxClient, dict[str, Any]]:
         """Like acquire(), also returning lease metadata for tool responses."""
         if session is None:
@@ -1137,7 +1252,9 @@ class InstanceManager:
         wait_seconds = self._acquire_wait_seconds if wait else 0.0
         queue_position: Optional[int] = None
 
-        client, needs_reset = self._try_grant_now(session, name, reset_scene=do_reset)
+        client, needs_reset = self._try_grant_now(
+            session, name, reset_scene=do_reset, for_job=for_job
+        )
         if client is not None:
             scene_reset = False
             saved_before_reset = None
@@ -1193,7 +1310,9 @@ class InstanceManager:
                         f"({_display(self._find(name).locked_by) if self._find(name) else '?'})"
                     )
                 raise NoFreeInstanceError(
-                    "No online idle 3ds Max instance available: "
+                    "No online idle 3ds Max instance available"
+                    + (" for job use" if for_job else "")
+                    + ": "
                     + self._busy_summary_locked()
                 )
             if len(self._wait_queue) >= self._acquire_queue_max:
@@ -1207,6 +1326,7 @@ class InstanceManager:
                 session=session,
                 name=name,
                 reset_scene=do_reset,
+                for_job=for_job,
                 event=threading.Event(),
                 enqueued_at=time.monotonic(),
                 position=len(self._wait_queue) + 1,
@@ -1280,6 +1400,7 @@ class InstanceManager:
         if inst is not None and inst.locked_by == session:
             inst.locked_by = None
             inst.locked_at = None
+            inst.lease_kind = "session"  # lease ends; next holder sets its own
         self._by_session.pop(session, None)
 
     def get_for_session(self, session: object) -> MaxClient:
@@ -1498,6 +1619,8 @@ class InstanceManager:
                         "locked_for_seconds": (
                             round(now - inst.locked_at, 1) if inst.locked_at else 0.0
                         ),
+                        "pool": inst.pool,
+                        "lease_kind": inst.lease_kind,
                     }
                 )
         for name in stale:
@@ -1524,6 +1647,8 @@ class InstanceManager:
                     "online": inst.online if inst else None,
                     "tcp_online": inst.tcp_online if inst else None,
                     "native_online": inst.native_online if inst else None,
+                    "pool": inst.pool if inst else None,
+                    "lease_kind": inst.lease_kind if inst else None,
                     "acquired_for_seconds": (
                         round(time.monotonic() - inst.locked_at, 1) if inst.locked_at else 0.0
                     ),
@@ -1531,6 +1656,25 @@ class InstanceManager:
                 if inst
                 else None,
             }
+
+    def register_job_session(self, session: object) -> None:
+        """Mark a worker session as an active queue job (TTL exemption)."""
+        if session is None:
+            return
+        with self._lock:
+            self._job_sessions.add(session)
+
+    def unregister_job_session(self, session: object) -> None:
+        """Remove a worker session from the job set (job finished/cancelled)."""
+        if session is None:
+            return
+        with self._lock:
+            self._job_sessions.discard(session)
+
+    def pool_instance_names(self, pool: str) -> list[str]:
+        """Instance names belonging to a pool (for strict isolation reporting)."""
+        with self._lock:
+            return [i.name for i in self._instances if i.pool == pool]
 
 
 # Module-level singleton used by server.py and the tools.
