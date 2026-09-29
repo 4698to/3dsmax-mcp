@@ -33,7 +33,11 @@ from ..instance_manager import (
     NoFreeInstanceError,
     manager,
 )
-from ..workspace_config import get_ocr_base
+from ..workspace_config import (
+    ensure_workspace_dir,
+    get_ocr_base,
+    resolve_workspace_dir,
+)
 from .executor_goskin import (
     DEFAULT_COMPLETE_TIMEOUT_S,
     confirm_goskin_job_step,
@@ -155,6 +159,7 @@ class JobManager:
         admin_ids: Optional[list[str]] = None,
         ocr_base: Optional[str] = None,
         complete_timeout_s: Optional[float] = None,
+        output_dir: Optional[str] = None,
         debug_mode: Optional[bool] = None,
     ):
         self._store = store if store is not None else JobStore()
@@ -213,6 +218,12 @@ class JobManager:
         self._complete_timeout_s = float(
             DEFAULT_COMPLETE_TIMEOUT_S if complete_timeout_s is None else complete_timeout_s
         )
+        # 蒙皮产物保存目录：MAXMCP_JOB_OUTPUT_DIR 或共享 workspace（/files/ 可下载）。
+        if output_dir is None:
+            raw = (os.environ.get("MAXMCP_JOB_OUTPUT_DIR") or "").strip()
+            self._output_dir = raw or str(ensure_workspace_dir(resolve_workspace_dir()))
+        else:
+            self._output_dir = output_dir
 
         self._jobs: dict[str, Job] = {}
         self._workers: dict[str, _Worker] = {}
@@ -772,6 +783,7 @@ class JobManager:
                 ocr_base=self._ocr_base,
                 run_timeout_s=self._run_timeout_s,
                 complete_timeout_s=self._complete_timeout_s,
+                output_dir=self._output_dir,
                 callback=lambda step, note, level="info": self._log_entry(
                     job_id, step, note, level
                 ),
@@ -798,6 +810,7 @@ class JobManager:
                 job,
                 ocr_base=self._ocr_base,
                 complete_timeout_s=self._complete_timeout_s,
+                output_dir=self._output_dir,
                 callback=lambda step, note, level="info": self._log_entry(
                     job_id, step, note, level
                 ),

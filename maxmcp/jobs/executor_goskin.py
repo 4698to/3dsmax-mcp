@@ -10,6 +10,7 @@ maxmcp/tools/goskin.py）。任务线程在每个安全点（§7.2）检查取�
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -106,6 +107,103 @@ def _load_scene(client: Any, file_path: str) -> dict[str, Any]:
     return {"ok": False, "error": f"unexpected response: {text!r}"}
 
 
+def _save_scene_as(client: Any, file_path: str) -> dict[str, Any]:
+    """等价 tools/scene_manage.save_scene_as 的 MaxScript 命令。
+
+    ``MCP_SceneManage.saveSceneAs`` 返回纯文本（保存路径或 "ERROR: ..."），
+    直接保存到显式绝对路径（Max 侧自动建父目录）。这里按文本约定解析。
+    """
+    fp = safe_value(file_path)
+    if not fp.startswith("@"):
+        fp = '@"' + fp.replace('"', '""') + '"'
+    text = _exec_ms(client, f"MCP_SceneManage.saveSceneAs {fp}").strip()
+    if text.startswith("ERROR"):
+        return {"ok": False, "error": text[len("ERROR:"):].strip() or text}
+    return {"ok": True, "path": text}
+
+
+def _attach_saved_output(
+    result: dict[str, Any],
+    client: Any,
+    job: Any,
+    output_dir: Optional[str],
+    log: Callable[[str, str, str], None],
+) -> None:
+    """蒙皮完成后把场景另存为 {output_dir}/{job_id}.max 并挂到 result。
+
+    产物路径/文件名写入 result 的 ``output_file``/``output_name``，由网页模板
+    dlLinks 转成 /files/ 下载链接。保存失败只 warn、不判任务失败。
+    """
+    if not output_dir:
+        log("save_output", "output_dir 未配置，跳过保存蒙皮结果", "warn")
+        return
+    try:
+        dest = os.path.join(output_dir, f"{job.job_id}.max")
+        saved = _save_scene_as(client, dest)
+    except Exception as exc:  # noqa: BLE001
+        log("save_output", f"保存蒙皮结果异常: {exc}", "warn")
+        return
+    if saved.get("ok"):
+        log("save_output", f"已保存蒙皮结果: {saved.get('path')}")
+        result["output_file"] = saved["path"]
+        result["output_name"] = Path(saved["path"]).name
+    else:
+        log("save_output", f"保存蒙皮结果失败: {saved.get('error')}", "warn")
+
+
+def _capture_viewport(client: Any, file_path: str) -> dict[str, Any]:
+    """截取 Max 当前视口到 PNG（等价 viewport.py 的 _capture_viewport_to_file）。
+
+    走 ``gw.getViewportDib`` 直接拿 DIB，不经 Windows 窗口捕获。Max 最小化时
+    会返回 16×16 占位图，调用前需确保非最小化。
+    """
+    dirpart = os.path.dirname(file_path).replace(os.sep, "/") or "."
+    fp = file_path.replace("\\", "/")
+    ms = (
+        f'(makeDir "{dirpart}" all:true; '
+        "completeredraw(); "
+        "local vp = gw.getViewportDib(); "
+        f'vp.filename = "{fp}"; save vp; "OK")'
+    )
+    text = _exec_ms(client, ms).strip()
+    if text.startswith("ERROR"):
+        return {"ok": False, "error": text}
+    return {"ok": True, "path": file_path}
+
+
+def _attach_viewport_capture(
+    result: dict[str, Any],
+    client: Any,
+    job: Any,
+    output_dir: Optional[str],
+    log: Callable[[str, str, str], None],
+) -> None:
+    """蒙皮完成后截取 Max 视口到 {output_dir}/{job_id}_viewport.png 并挂到 result。
+
+    截图写入 result 的 ``viewport_file``/``viewport_name``，网页模板在结果分块
+    直接渲染 <img>（/files/ 下载链路）。失败只 warn，不判任务失败。
+    """
+    if not output_dir:
+        return
+    try:
+        # Max 最小化时 getViewportDib 只返回 16×16 占位；仅 iconic 时恢复窗口
+        # （restore 只动最小化，不会把全屏/最大化窗口窗口化）。
+        st = max_window_state(client=client)
+        if st.get("iconic"):
+            restore_max_window(client=client)
+        dest = os.path.join(output_dir, f"{job.job_id}_viewport.png")
+        shot = _capture_viewport(client, dest)
+    except Exception as exc:  # noqa: BLE001
+        log("capture_viewport", f"视口截图异常: {exc}", "warn")
+        return
+    if shot.get("ok"):
+        log("capture_viewport", f"已保存视口截图: {shot.get('path')}")
+        result["viewport_file"] = shot["path"]
+        result["viewport_name"] = Path(shot["path"]).name
+    else:
+        log("capture_viewport", f"视口截图失败: {shot.get('error')}", "warn")
+
+
 def _get_unhidden_meshes_bones(client: Any) -> dict[str, Any]:
     """等价 tools/scene_manage.get_unhidden_meshes_bones 的 MaxScript 命令。"""
     data = _parse_json(_exec_ms(client, "MCP_SceneManage.getunhidden_meshes_bones()"))
@@ -165,6 +263,7 @@ def run_goskin_job(
     ocr_base: str,
     run_timeout_s: float = 1800.0,
     complete_timeout_s: float = DEFAULT_COMPLETE_TIMEOUT_S,
+    output_dir: Optional[str] = None,
     callback: Optional[Callable[[str, str, str], None]] = None,
     is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> dict[str, Any]:
@@ -177,14 +276,18 @@ def run_goskin_job(
         ocr_base: OCR 服务地址（由 scheduler 从配置解析）。
         run_timeout_s: 任务整体超时（§7.4 MAXMCP_JOB_RUN_TIMEOUT），<=0 不限。
         complete_timeout_s: 单步 OCR 等待上限（「开始蒙皮」等「完成」）。
+        output_dir: 蒙皮完成后场景另存为的目录（通常为共享 workspace，
+            /files/ 可直接下载）；为 None 时跳过保存。
         callback: 步骤日志回调 callback(step, note, level)；scheduler 写入
             job.log 并落盘。
         is_cancelled: 每安全点调用的取消探测；返回 True 则中止。
 
     Returns:
         供 scheduler 切换状态的字典：
-          - {"ok": True,  "status": JobStatus.SUCCEEDED, "confirmation": ..., "counts": ...}
-          - {"ok": True,  "status": JobStatus.AWAITING_CONFIRM, ...}（manual 门禁）
+          - {"ok": True,  "status": JobStatus.SUCCEEDED, "counts": ...,
+             "output_file": ..., "output_name": ...}（auto 模式，含产物路径）
+          - {"ok": True,  "status": JobStatus.AWAITING_CONFIRM,
+             "confirmation": ..., "counts": ...}（manual 门禁，提示供人工确认）
           - {"ok": False, "status": JobStatus.FAILED, "code": ..., "error": ...}
           - {"ok": False, "status": JobStatus.CANCELLED}
           - {"ok": False, "status": JobStatus.FAILED, "code": "timeout", "error": ...}
@@ -354,12 +457,20 @@ def run_goskin_job(
             "error": started.get("error"),
         }
     log("confirm_start", "蒙皮完成")
-    return {
+
+    # 7. 保存蒙皮结果：场景另存为 {output_dir}/{job_id}.max，/files/ 可直接下载。
+    #    保存失败不判任务失败（warn 继续），auto 模式不带 confirmation 提示。
+    result: dict[str, Any] = {
         "ok": True,
         "status": JobStatus.SUCCEEDED,
-        "confirmation": confirmation,
         "counts": counts,
     }
+    aborted = _abort("save_output")
+    if aborted is not None:
+        return aborted
+    _attach_saved_output(result, client, job, output_dir, log)
+    _attach_viewport_capture(result, client, job, output_dir, log)
+    return result
 
 
 def confirm_goskin_job_step(
@@ -368,12 +479,14 @@ def confirm_goskin_job_step(
     *,
     ocr_base: str,
     complete_timeout_s: float = DEFAULT_COMPLETE_TIMEOUT_S,
+    output_dir: Optional[str] = None,
     callback: Optional[Callable[[str, str, str], None]] = None,
     is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> dict[str, Any]:
     """manual 模式确认动作（§7.3）：对停在 awaiting_confirm 的任务点击「开始蒙皮」。
 
-    复用 executor 持有的 MaxClient 与租约（场景已就绪）。返回结构与
+    复用 executor 持有的 MaxClient 与租约（场景已就绪）。成功后同样把场景
+    另存为 {output_dir}/{job_id}.max（与 auto 分支一致）。返回结构与
     ``run_goskin_job`` 相同，供 scheduler 切换状态。
     """
     log = callback or (lambda step, note, level="info": None)
@@ -398,4 +511,7 @@ def confirm_goskin_job_step(
             "error": started.get("error"),
         }
     log("confirm_start", "蒙皮完成")
-    return {"ok": True, "status": JobStatus.SUCCEEDED}
+    result: dict[str, Any] = {"ok": True, "status": JobStatus.SUCCEEDED}
+    _attach_saved_output(result, client, job, output_dir, log)
+    _attach_viewport_capture(result, client, job, output_dir, log)
+    return result
