@@ -87,11 +87,20 @@ def _maxscript_int_array(values: list[int]) -> str:
 
 
 def _load_scene(client: Any, file_path: str) -> dict[str, Any]:
-    """等价 tools/scene_manage.load_scene 的 MaxScript 命令。"""
+    """等价 tools/scene_manage.load_scene 的 MaxScript 命令。
+
+    MCP_SceneManage.loadScene 返回纯文本（"Loaded scene: <name>" 或
+    "ERROR: ..."），不是 JSON；这里按文本约定解析，不要走 _parse_json。
+    """
     fp = safe_value(file_path)
     if not fp.startswith("@"):
         fp = '@"' + fp.replace('"', '""') + '"'
-    return _parse_json(_exec_ms(client, f"MCP_SceneManage.loadScene {fp}"))
+    text = _exec_ms(client, f"MCP_SceneManage.loadScene {fp}").strip()
+    if text.startswith("Loaded scene:"):
+        return {"ok": True, "loaded": text[len("Loaded scene:"):].strip()}
+    if text.startswith("ERROR:"):
+        return {"ok": False, "error": text[len("ERROR:"):].strip()}
+    return {"ok": False, "error": f"unexpected response: {text!r}"}
 
 
 def _get_unhidden_meshes_bones(client: Any) -> dict[str, Any]:
