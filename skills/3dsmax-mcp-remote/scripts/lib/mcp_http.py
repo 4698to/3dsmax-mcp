@@ -52,6 +52,7 @@ class McpHttpSession:
         timeout: float = 600.0,
         session_id: str | None = None,
         session_id_file: str | os.PathLike | None = None,
+        audit_user_id: str | None = None,
     ) -> None:
         try:
             self.mcp_url = resolve_mcp_url(mcp_url)
@@ -62,6 +63,9 @@ class McpHttpSession:
         self.client_name = client_name
         self._session_id_file = str(session_id_file) if session_id_file else None
         self.session_id = session_id or self._read_session_file(self._session_id_file)
+        # 审计 user_id：随每次 JSON-RPC 请求带 X-Maxmcp-User-Id 头，
+        # 服务端在 submit_goskin_job 参数为空时兜底读取（见 tools/jobs.py）。
+        self.audit_user_id = (audit_user_id or "").strip() or None
         self._next_id = 1
         self._initialized = False
 
@@ -105,6 +109,8 @@ class McpHttpSession:
             }
             if self.session_id:
                 headers["Mcp-Session-Id"] = self.session_id
+            if self.audit_user_id:
+                headers["X-Maxmcp-User-Id"] = self.audit_user_id
             body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
             req = Request(self.mcp_url, data=body, headers=headers, method="POST")
             try:

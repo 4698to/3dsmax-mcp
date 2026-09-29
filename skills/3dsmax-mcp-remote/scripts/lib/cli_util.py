@@ -31,6 +31,12 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="File holding the Mcp-Session-Id to resume; a fresh session id is also saved here",
     )
+    parser.add_argument(
+        "--audit-user-id",
+        default=None,
+        help="Audit user id; sent as X-Maxmcp-User-Id on every request so submit_goskin_job "
+        "records it even when its user_id argument is empty",
+    )
 
 
 def build_session(
@@ -44,6 +50,7 @@ def build_session(
         timeout=args.timeout,
         session_id=args.session_id,
         session_id_file=args.session_id_file,
+        audit_user_id=getattr(args, "audit_user_id", None),
     )
 
 
