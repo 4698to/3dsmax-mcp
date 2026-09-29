@@ -6,8 +6,9 @@
   管理员见 ``MAXMCP_JOB_ADMIN_IDS``）；
 - HTTP 路由（参照 files.py 的 ``@mcp.custom_route``）：``POST /jobs``、
   ``GET /jobs/{id}``、``GET /jobs``、``POST /jobs/{id}/cancel``、
-  ``POST /jobs/{id}/confirm``，owner 取 ``X-Client-Id`` 头，缺失视为匿名
-  公共队列（受 ``MAXMCP_JOB_ANON_QUEUE_MAX`` 约束）；
+  ``POST /jobs/{id}/confirm``、``POST /jobs/{id}/retry``，owner 取
+  ``X-Client-Id`` 头，缺失视为匿名公共队列（受 ``MAXMCP_JOB_ANON_QUEUE_MAX``
+  约束）；
 - 审计 user_id：提交方（Agent）可显式传 ``user_id`` 参数（MCP 工具）或
   ``X-Maxmcp-User-Id`` 请求头（HTTP）。它**只记录到任务日志与 Job 字段**，
   用于追踪"谁提交的"，不参与 owner 鉴权。
@@ -465,6 +466,45 @@ async def cancel_job_http(request: Request) -> Response:
     return JSONResponse({"ok": True, **result})
 
 
+@mcp.custom_route("/jobs/{job_id}/retry", methods=["POST"])
+async def retry_job_http(request: Request) -> Response:
+    """POST /jobs/{id}/retry — 重试失败任务（本人、管理员、或持 view 令牌者）。
+
+    仅 failed 可重试；状态页通过 ?t=view_token 调用即可重试自己的提交，
+    重试后同一 URL 继续跟踪（原地重跑，不生成新任务）。
+    """
+    owner = _client_id(request)
+    job_id = request.path_params["job_id"]
+    token = request.query_params.get("t") or ""
+    try:
+        data = job_manager.get_dict(job_id)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(_error_payload(exc), status_code=404)
+    view_ok = _token_matches(data.get("view_token") or "", token)
+    if not (
+        job_manager.is_admin(owner) or data.get("owner") == owner or view_ok
+    ):
+        return JSONResponse(
+            {
+                "ok": False,
+                "code": "JOB_PERMISSION_DENIED",
+                "retryable": False,
+                "error": "只能重试自己的任务（或由管理员操作）",
+            },
+            status_code=403,
+        )
+    try:
+        result = job_manager.retry(
+            job_id,
+            requester=owner,
+            is_admin=job_manager.is_admin(owner),
+            view_token_ok=view_ok,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(_error_payload(exc), status_code=400)
+    return JSONResponse({"ok": True, **result})
+
+
 # --------------------------------------------------------------------------- #
 # 只读状态页（浏览器视图）
 # --------------------------------------------------------------------------- #
@@ -534,10 +574,12 @@ ul.log li{font-size:13px;padding:3px 0;border-bottom:1px dashed #334155}
 #queue{color:#94a3b8;margin-bottom:8px}
 .btn-danger{display:none;background:#dc2626;color:#fff;border:0;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer}
 .btn-danger:hover{background:#b91c1c}.btn-danger:disabled{opacity:.5;cursor:not-allowed}
+.btn-retry{display:none;background:#16a34a;color:#fff;border:0;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;margin-left:8px}
+.btn-retry:hover{background:#15803d}.btn-retry:disabled{opacity:.5;cursor:not-allowed}
 </style>
 </head>
 <body>
-<div class="wrap"><div id="errbox"></div><h1>GoSkin 任务 <span id="jid" class="dim"></span><span id="badge" class="badge"></span></h1><div class="card"><h2>任务信息</h2><div id="meta"></div></div><div class="card"><h2>下载</h2><ul id="files" class="files"></ul></div><div class="card"><h2>队列 / 操作</h2><div id="queue"></div><button id="cancelBtn" class="btn-danger">取消任务</button></div><div class="card"><h2>日志</h2><ul id="log" class="log"></ul></div><div class="card"><h2>结果</h2><div id="result"></div></div></div>
+<div class="wrap"><div id="errbox"></div><h1>GoSkin 任务 <span id="jid" class="dim"></span><span id="badge" class="badge"></span></h1><div class="card"><h2>任务信息</h2><div id="meta"></div></div><div class="card"><h2>下载</h2><ul id="files" class="files"></ul></div><div class="card"><h2>队列 / 操作</h2><div id="queue"></div><button id="cancelBtn" class="btn-danger">取消任务</button><button id="retryBtn" class="btn-retry">重试任务</button></div><div class="card"><h2>日志</h2><ul id="log" class="log"></ul></div><div class="card"><h2>结果</h2><div id="result"></div></div></div>
 <script>
 const JOB_ID=__JOB_ID__,TOKEN=__TOKEN__,TERMINAL=['succeeded','failed','cancelled'];
 const SS={queued:['排队中','#2563eb'],running:['运行中','#3b82f6'],awaiting_confirm:['待确认','#f59e0b'],succeeded:['成功','#16a34a'],failed:['失败','#dc2626'],cancelled:['已取消','#6b7280']};
@@ -587,6 +629,9 @@ async function rf(){
   const cb=document.getElementById('cancelBtn');
   if(TERMINAL.includes(j.status)){cb.style.display='none'}
   else{cb.style.display='inline-block';cb.disabled=false;cb.onclick=async()=>{if(!window.confirm('确定取消任务 '+JOB_ID+' 吗？'))return;cb.disabled=true;try{const r=await fetch('/jobs/'+encodeURIComponent(JOB_ID)+'/cancel?t='+encodeURIComponent(TOKEN),{method:'POST'});const jj=await r.json();if(r.status===403){eb('无权取消：令牌无效');cb.disabled=false;return}if(!r.ok||!jj.ok){eb('取消失败：'+((jj.error&&(jj.error.message||jj.error))||('HTTP '+r.status)));cb.disabled=false;return}eb('已发送取消请求，正在刷新…');rf()}catch(e){eb('网络错误：'+e.message);cb.disabled=false}}}
+  const rb=document.getElementById('retryBtn');
+  if(j.status==='failed'){rb.style.display='inline-block';rb.disabled=false;rb.onclick=async()=>{if(!window.confirm('确定重试任务 '+JOB_ID+' 吗？'))return;rb.disabled=true;try{const r=await fetch('/jobs/'+encodeURIComponent(JOB_ID)+'/retry?t='+encodeURIComponent(TOKEN),{method:'POST'});const jj=await r.json();if(r.status===403){eb('无权重试：令牌无效');rb.disabled=false;return}if(!r.ok||!jj.ok){eb('重试失败：'+((jj.error&&(jj.error.message||jj.error))||('HTTP '+r.status)));rb.disabled=false;return}eb('已重试，任务重新排队…');rf()}catch(e){eb('网络错误：'+e.message);rb.disabled=false}}}
+  else{rb.style.display='none'}
   const ul=document.getElementById('log');ul.innerHTML='';
   for(const e of(j.log||[])){const li=document.createElement('li');li.innerHTML='<span class="ts">'+esc(fmt(e.ts))+'</span><span class="step">'+esc(e.step||'')+'</span><span class="lvl lvl-'+esc(e.level||'info')+'">'+esc(e.level||'')+'</span><span>'+esc(e.note||'')+'</span>';ul.appendChild(li)}
   if(!(j.log||[]).length){const li=document.createElement('li');li.textContent='（暂无日志）';ul.appendChild(li)}

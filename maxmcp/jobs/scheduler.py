@@ -542,6 +542,57 @@ class JobManager:
             thread.start()
         return {"ok": True, "status": JobStatus.RUNNING}
 
+    def retry(
+        self,
+        job_id: str,
+        requester: Optional[str] = None,
+        is_admin: bool = False,
+        view_token_ok: bool = False,
+    ) -> dict[str, Any]:
+        """重试失败任务：原地重跑（failed → queued，retries+1，复用视图令牌）。
+
+        仅 FAILED 可重试；其他状态抛 JobStateError。重试不复制新任务，同一
+        job_id / status_url 继续跟踪；created_at 刷新为当前时间重新排队
+        （避免重启后排队 TTL 误判），store 追加 reset_terminal 事件保证
+        重启重建一致。
+        """
+        requester = requester or ""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise JobNotFoundError(f"任务不存在: {job_id}")
+            if not (is_admin or requester == job.owner or view_token_ok):
+                raise JobPermissionError("只能重试自己的任务（或由管理员操作）")
+            if job.status != JobStatus.FAILED:
+                raise JobStateError(f"只有失败任务可重试（当前状态 {job.status}）")
+            now = time.time()
+            job.status = JobStatus.QUEUED
+            job.cancel_requested = False
+            job.started_at = None
+            job.finished_at = None
+            job.created_at = now
+            job.result = {}
+            job.retries += 1
+            self._store.reset_terminal(job_id, at=now, retries=job.retries)
+            self._store.set_status(job_id, JobStatus.QUEUED, at=now)
+            job.add_log("retry", f"手动重试（第 {job.retries} 次），任务重新入队")
+            self._store.append_log(job_id, job.log[-1])
+            job.queue_position = (
+                sum(1 for j in self._jobs.values() if j.status == JobStatus.QUEUED) + 1
+            )
+            _log.info(
+                "job %s retried by %r (retries=%d) -> queued",
+                job_id,
+                requester or "anonymous",
+                job.retries,
+            )
+            return {
+                "ok": True,
+                "status": JobStatus.QUEUED,
+                "retries": job.retries,
+                "job_id": job_id,
+            }
+
     # ------------------------------------------------------------------ #
     # 调度循环
     # ------------------------------------------------------------------ #

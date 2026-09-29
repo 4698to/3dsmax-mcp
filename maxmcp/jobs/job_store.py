@@ -91,6 +91,24 @@ class JobStore:
     def set_cancel_requested(self, job_id: str) -> None:
         self._append(job_id, {"type": "cancel_requested", "at": time.time()})
 
+    def reset_terminal(
+        self,
+        job_id: str,
+        at: Optional[float] = None,
+        retries: Optional[int] = None,
+    ) -> None:
+        """重置终态（任务重试用）：清除结果/时间戳并刷新 created_at。
+
+        重试是原地重跑（failed → queued，复用同一 job_id/视图令牌），仅改内存
+        会导致服务重启后恢复出旧 result / 旧 created_at（旧 created_at 可能
+        触发排队 TTL 误判），故追加该事件保证重启重建一致；重试次数也一并
+        落盘，重启后不丢失。
+        """
+        payload: dict[str, Any] = {"type": "reset_terminal", "at": at or time.time()}
+        if retries is not None:
+            payload["retries"] = retries
+        self._append(job_id, payload)
+
     def _append(self, job_id: str, event: dict[str, Any]) -> None:
         line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
         with self._lock:
@@ -159,6 +177,19 @@ class JobStore:
             job.result = event.get("result") or {}
         elif etype == "cancel_requested":
             job.cancel_requested = True
+        elif etype == "reset_terminal":
+            # 重试：清终态字段，刷新 created_at（避免重启后排队 TTL 误判），
+            # 并恢复重试次数。
+            job.cancel_requested = False
+            job.result = {}
+            job.started_at = None
+            job.finished_at = None
+            at = event.get("at")
+            if isinstance(at, (int, float)):
+                job.created_at = float(at)
+            retries = event.get("retries")
+            if isinstance(retries, int):
+                job.retries = retries
         return job
 
     # ------------------------------------------------------------------ #
