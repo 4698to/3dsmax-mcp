@@ -330,6 +330,7 @@ jobs = max2, max3
 | `GET /jobs?status=&owner=&limit=` | 列表（分页） |
 | `POST /jobs/{id}/cancel` | 取消 |
 | `POST /jobs/{id}/confirm` | manual 模式确认「开始蒙皮」 |
+| `GET /jobs/admin?token=` | 浏览器任务管理台（查看/取消/重试/确认所有任务，需 `MAXMCP_JOB_ADMIN_TOKEN`） |
 
 - `owner`：HTTP 侧取 `X-Client-Id` 头；缺失则视为"匿名公共队列"（受配额与 `MAXMCP_JOB_ANON_QUEUE_MAX` 约束）。跨用户查询/取消权限：仅本人 + `MAXMCP_JOB_ADMIN_IDS`（逗号分隔 client id）可全量。
 - 审计 `user_id`：提交方可额外带 `X-Maxmcp-User-Id` 头（MCP 工具则传 `user_id` 参数），**仅写入任务日志与 `Job.user_id`**，用于追踪谁提交的，不影响 owner。
@@ -380,6 +381,7 @@ GET /jobs/{id}
 | `MAXMCP_JOB_RECOVER_RUNNING` | false | 重启后 running 任务是否重入队 |
 | `MAXMCP_JOB_CLEANUP_FILES` | false | 终态后是否删场景文件 |
 | `MAXMCP_JOB_ADMIN_IDS` | 空 | 可管理他人任务的白名单 |
+| `MAXMCP_JOB_ADMIN_TOKEN` | 空 | 管理台令牌：网页端用其作为 `X-Client-Id` 即视为管理员；`GET /jobs/admin` 鉴权用 |
 | `MAXMCP_JOB_ANON_QUEUE_MAX` | 3 | 匿名（无 X-Client-Id）排队上限 |
 
 ---

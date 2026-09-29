@@ -208,9 +208,13 @@ class JobManager:
             if cleanup_files is None
             else bool(cleanup_files)
         )
-        self._admin_ids = frozenset(
-            _env_list("MAXMCP_JOB_ADMIN_IDS") if admin_ids is None else (admin_ids or [])
-        )
+        # 管理员：MAXMCP_JOB_ADMIN_IDS 白名单 + MAXMCP_JOB_ADMIN_TOKEN（管理台令牌，
+        # 网页端无法设置 X-Client-Id 头，页面用它作为 X-Client-Id 即被视为管理员）。
+        _ids = list(admin_ids) if admin_ids is not None else _env_list("MAXMCP_JOB_ADMIN_IDS")
+        _token = (os.environ.get("MAXMCP_JOB_ADMIN_TOKEN") or "").strip()
+        if _token:
+            _ids.append(_token)
+        self._admin_ids = frozenset(_ids)
         self._debug_mode = (
             _env_bool("MAXMCP_JOB_DEBUG", False) if debug_mode is None else bool(debug_mode)
         )
@@ -839,6 +843,7 @@ class JobManager:
             status = result.get("status")
             if status == JobStatus.AWAITING_CONFIRM:
                 job.status = JobStatus.AWAITING_CONFIRM
+                job.result = result
                 self._store.set_status(job_id, JobStatus.AWAITING_CONFIRM)
                 self._store.set_result(job_id, result)
                 self._holds[job_id] = time.time() + self._hold_ttl_s
@@ -851,6 +856,9 @@ class JobManager:
             self._mark_terminal_locked(
                 job_id, status, code=result.get("code"), error=result.get("error")
             )
+            # 上面先把内存置为失败占位（与 store 一致），这里再覆盖为执行器
+            # 返回的真实 result（output_file/viewport_file 等），保持内存=JSONL 末条。
+            job.result = result
             self._store.set_result(job_id, result)
             self._holds.pop(job_id, None)
             if self._cleanup_files and job.scene_local_path:
@@ -875,10 +883,10 @@ class JobManager:
         now = time.time()
         job.status = status
         job.finished_at = now
+        term_result = {"ok": False, "status": status, "code": code, "error": error}
+        job.result = term_result
         self._store.set_status(job_id, status, at=now)
-        self._store.set_result(
-            job_id, {"ok": False, "status": status, "code": code, "error": error}
-        )
+        self._store.set_result(job_id, term_result)
 
     def _release_worker_locked(self, job_id: str) -> None:
         worker = self._workers.pop(job_id, None)

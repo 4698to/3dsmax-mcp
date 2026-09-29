@@ -6,8 +6,9 @@
   管理员见 ``MAXMCP_JOB_ADMIN_IDS``）；
 - HTTP 路由（参照 files.py 的 ``@mcp.custom_route``）：``POST /jobs``、
   ``GET /jobs/{id}``、``GET /jobs``、``POST /jobs/{id}/cancel``、
-  ``POST /jobs/{id}/confirm``、``POST /jobs/{id}/retry``，owner 取
-  ``X-Client-Id`` 头，缺失视为匿名公共队列（受 ``MAXMCP_JOB_ANON_QUEUE_MAX``
+  ``POST /jobs/{id}/confirm``、``POST /jobs/{id}/retry``、浏览器管理台
+  ``GET /jobs/admin``（查看/控制所有任务，需 ``MAXMCP_JOB_ADMIN_TOKEN``），
+  owner 取 ``X-Client-Id`` 头，缺失视为匿名公共队列（受 ``MAXMCP_JOB_ANON_QUEUE_MAX``
   约束）；
 - 审计 user_id：提交方（Agent）可显式传 ``user_id`` 参数（MCP 工具）或
   ``X-Maxmcp-User-Id`` 请求头（HTTP）。它**只记录到任务日志与 Job 字段**，
@@ -374,6 +375,210 @@ async def submit_job_http(request: Request) -> Response:
     )
 
 
+@mcp.custom_route("/jobs/admin", methods=["GET"])
+async def admin_view_http(request: Request) -> Response:
+    """GET /jobs/admin?token=… — 浏览器任务管理台（查看/控制所有任务）。
+
+    管理员令牌 = ``MAXMCP_JOB_ADMIN_TOKEN``（或 ``MAXMCP_JOB_ADMIN_IDS`` 中任一
+    ID）。令牌经 ``?token=`` 查询参数或 ``mcp_job_admin_token`` Cookie 传入；
+    页面 JS 用同一令牌作为 ``X-Client-Id`` 头调用 ``/jobs/*`` API（取消/重试/
+    确认）。未配置任何管理员令牌时控制台不可用（403）。
+
+    注意：本路由必须在 ``/jobs/{job_id}`` 之前注册，避免 ``admin`` 被当作
+    job_id 匹配。
+    """
+    token = request.query_params.get("token") or ""
+    cookie = request.cookies.get("mcp_job_admin_token") or ""
+    if not (job_manager.is_admin(token) or job_manager.is_admin(cookie)):
+        return HTMLResponse("管理令牌无效", status_code=403)
+    resp = HTMLResponse(_ADMIN_PAGE_TEMPLATE)
+    if token:
+        # 首次带 token 打开时写入 Cookie，之后直接访问 /jobs/admin 即可。
+        resp.set_cookie("mcp_job_admin_token", token, path="/", samesite="lax")
+    return resp
+
+
+_ADMIN_PAGE_TEMPLATE = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GoSkin 任务管理台</title>
+<style>
+body{margin:0;background:#0f172a;color:#e2e8f0;font:14px system-ui,'Segoe UI',sans-serif}
+.wrap{max-width:1320px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:0 0 12px}
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.stat{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:8px 14px;min-width:86px}
+.stat b{display:block;font-size:20px;line-height:1.2}
+.stat span{color:#94a3b8;font-size:12px}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+select,input[type=text]{background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px 8px;font-size:13px}
+button{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer}
+button:hover{background:#1d4ed8}
+button:disabled{opacity:.5;cursor:not-allowed}
+label.chk{font-size:13px;color:#94a3b8;display:flex;align-items:center;gap:5px}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;color:#fff;font-size:12px;white-space:nowrap}
+table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:8px;overflow:hidden}
+th,td{padding:6px 10px;font-size:13px;border-bottom:1px solid #334155;text-align:left;vertical-align:middle}
+th{color:#94a3b8;font-size:12px;letter-spacing:.3px;background:#0b1220}
+tr:hover td{background:#24324a}
+td.jid{font-family:Consolas,monospace;color:#93c5fd;font-size:12px}
+.dim{color:#64748b}
+.err{color:#f87171;white-space:pre-wrap}.ok{color:#4ade80;white-space:pre-wrap}
+.op a,.op button{margin-right:6px}
+a{color:#60a5fa;text-decoration:none}
+a:hover{text-decoration:underline}
+tr.detail{display:none}
+tr.detail.open{display:table-row}
+tr.detail td{background:#0f172a;padding:10px 14px}
+ul.log{list-style:none;margin:0;padding:0;max-height:260px;overflow:auto}
+ul.log li{font-size:13px;padding:3px 0;border-bottom:1px dashed #334155}
+.ts{color:#64748b;margin-right:8px;font-family:Consolas,monospace}
+.step{color:#93c5fd;margin-right:8px}
+.lvl-error{color:#f87171}.lvl-warn{color:#fbbf24}
+.files{list-style:none;margin:0;padding:0}
+.files li{padding:2px 0;border-bottom:1px dashed #334155}
+.kv{color:#94a3b8;display:inline-block;min-width:7em}
+.mline{margin:2px 0}
+#errbox{display:none;background:#450a0a;border:1px solid #dc2626;border-radius:8px;padding:10px 14px;margin-bottom:12px;color:#fecaca;font-size:13px}
+.act-ok{background:#16a34a}.act-ok:hover{background:#15803d}
+.act-danger{background:#dc2626}.act-danger:hover{background:#b91c1c}
+.bar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="errbox"></div>
+<h1>GoSkin 任务管理台</h1>
+<div id="stats" class="stats"></div>
+<div class="filters">
+<select id="fStatus"><option value="">全部状态</option><option value="queued">queued</option><option value="running">running</option><option value="awaiting_confirm">awaiting_confirm</option><option value="succeeded">succeeded</option><option value="failed">failed</option><option value="cancelled">cancelled</option></select>
+<select id="fPriority"><option value="">全部优先级</option><option value="high">high</option><option value="normal">normal</option><option value="low">low</option></select>
+<select id="fConfirm"><option value="">全部确认模式</option><option value="auto">auto</option><option value="manual">manual</option></select>
+<input type="text" id="fOwner" placeholder="过滤 owner（精确）">
+<input type="text" id="fKeyword" placeholder="过滤 job_id / 用户 / 实例">
+<button id="btnGo">刷新</button>
+<label class="chk"><input type="checkbox" id="chkAuto" checked>自动刷新(2s)</label>
+</div>
+<div class="bar"><button id="btnMore">加载更多</button><span id="count" class="dim"></span></div>
+<table>
+<thead><tr><th>状态</th><th>任务ID</th><th>优先级</th><th>确认</th><th>实例</th><th>owner</th><th>提交者</th><th>创建时间</th><th>耗时</th><th>重试</th><th>操作</th></tr></thead>
+<tbody id="rows"></tbody>
+</table>
+</div>
+<script>
+const SS={queued:['排队中','#2563eb'],running:['运行中','#3b82f6'],awaiting_confirm:['待确认','#f59e0b'],succeeded:['成功','#16a34a'],failed:['失败','#dc2626'],cancelled:['已取消','#6b7280']};
+const PR={high:['高','#dc2626'],normal:['中','#94a3b8'],low:['低','#64748b']};
+const TERMINAL=['succeeded','failed','cancelled'];
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
+function fmt(ts){if(!ts)return'';const d=new Date(ts*1e3),p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())}
+function dur(j){const s=j.started_at,f=j.finished_at;if(!s)return'-';const t=(f||Date.now()/1e3)-s;if(t<60)return Math.round(t)+'s';if(t<3600)return (t/60).toFixed(1)+'m';return (t/3600).toFixed(1)+'h'}
+function readCookie(n){const m=document.cookie.split('; ').find(r=>r.startsWith(n+'='));return m?decodeURIComponent(m.slice(n.length+1)):''}
+let TOKEN=readCookie('mcp_job_admin_token')||new URLSearchParams(location.search).get('token')||'';
+if(TOKEN){localStorage.setItem('mcp_job_admin_token',TOKEN);document.cookie='mcp_job_admin_token='+encodeURIComponent(TOKEN)+';path=/;SameSite=Lax'}
+function B(id){return document.getElementById(id)}
+function eb(m){const x=B('errbox');x.style.display='block';x.textContent=m}
+function clearErr(){B('errbox').style.display='none'}
+async function api(path,opts){
+ opts=opts||{};opts.headers=Object.assign({'X-Client-Id':TOKEN},opts.headers||{});
+ const r=await fetch(path,opts);let j={};
+ try{j=await r.json()}catch(e){}
+ if(r.status===403){eb('管理令牌无效：请用 /jobs/admin?token=… 打开');throw new Error('403')}
+ return {http:r.status,ok:r.ok,data:j}
+}
+let ALL=[],STATS=null,EXP={},limit=500,autoOn=true;
+async function load(){
+ try{
+  const qs=new URLSearchParams();qs.set('limit',String(limit));
+  const st=B('fStatus').value;if(st)qs.set('status',st);
+  const ow=B('fOwner').value.trim();if(ow)qs.set('owner',ow);
+  const r=await api('/jobs?'+qs.toString());
+  if(r.http!==200){eb('列表查询失败 HTTP '+r.http);return}
+  clearErr();ALL=r.data.jobs||[];STATS=r.data.stats||null;
+  if(STATS){const box=B('stats');box.innerHTML='';
+   const cards=[['排队中',STATS.queued||0,'#2563eb'],['运行中',STATS.running||0,'#3b82f6'],['待确认',STATS.awaiting_confirm||0,'#f59e0b'],['已完成',STATS.terminal||0,'#16a34a'],['并发上限',STATS.max_concurrent==null?'-':STATS.max_concurrent,'#64748b']];
+   for(const c of cards){const d=document.createElement('div');d.className='stat';d.innerHTML='<b style="color:'+c[2]+'">'+esc(c[1])+'</b><span>'+esc(c[0])+'</span>';box.appendChild(d)}
+  }
+  render();
+ }catch(e){}
+}
+function filt(){
+ const kw=B('fKeyword').value.trim().toLowerCase(),pr=B('fPriority').value,cm=B('fConfirm').value;
+ return ALL.filter(j=>{
+  if(pr&&j.priority!==pr)return false;
+  if(cm&&j.confirm_mode!==cm)return false;
+  if(!kw)return true;
+  const hay=String(j.job_id+' '+(j.owner||'')+' '+(j.user_id||'')+' '+(j.instance||'')).toLowerCase();
+  return hay.indexOf(kw)>=0;
+ });
+}
+function badge(st){const s=SS[st]||[st,'#2563eb'];return '<span class="badge" style="background:'+s[1]+'">'+esc(s[0])+'</span>'}
+function renderRes(j){const err=j.error||(j.result&&j.result.error);if(err)return'<div class="err">'+esc(err)+'</div>';if(j.result&&Object.keys(j.result).length){let r='';const shot=(typeof j.result==='object'&&j.result.viewport_name)?String(j.result.viewport_name).split(/[\\/]/).pop():'';if(shot)r+='<a href="/files/'+encodeURIComponent(shot)+'" target="_blank"><img src="/files/'+encodeURIComponent(shot)+'" alt="viewport" style="max-width:100%;max-height:360px;border:1px solid #334155;border-radius:8px;display:block;margin-bottom:8px"></a>';const t=typeof j.result==='string'?j.result:(j.result.message||JSON.stringify(j.result,null,2));return r+'<div class="ok">'+esc(t)+'</div>'}return'<div class="dim">（无结果）</div>'}
+function renderFiles(j){
+ const L=[];
+ if(j.scene_local_path){const n=String(j.scene_local_path).split(/[\\/]/).pop();if(n)L.push('<li><a href="/files/'+encodeURIComponent(n)+'">场景文件 — '+esc(n)+'</a></li>')}
+ const r=j.result||{};
+ if(r&&typeof r==='object')for(const k of Object.keys(r)){
+  const v=r[k];if(typeof v!=='string'||!v)continue;
+  let url=null;
+  if(new RegExp('^https?://','i').test(v))url=v;
+  else if(new RegExp('\\.(max|fbx|png|jpe?g|bmp|tga|exr|json|txt)$','i').test(v)){const n=v.split(/[\\/]/).pop();if(n)url='/files/'+encodeURIComponent(n)}
+  if(url)L.push('<li><a href="'+esc(url)+'">'+esc(k)+' — '+esc(v.split(/[\\/]/).pop()||k)+'</a></li>');
+ }
+ return L.join('');
+}
+function render(){
+ const rows=filt().slice().sort((a,b)=>(b.created_at||0)-(a.created_at||0));
+ B('count').textContent='显示 '+rows.length+' / 共 '+ALL.length+' 条（当前上限 '+limit+'）';
+ const tb=B('rows');tb.innerHTML='';
+ for(const j of rows){
+  const tr=document.createElement('tr');
+  let ops='';
+  if(!TERMINAL.includes(j.status))ops+='<button class="act-danger" data-a="cancel" data-id="'+esc(j.job_id)+'">取消</button>';
+  if(j.status==='failed')ops+='<button class="act-ok" data-a="retry" data-id="'+esc(j.job_id)+'">重试</button>';
+  if(j.status==='awaiting_confirm')ops+='<button class="act-ok" data-a="confirm" data-id="'+esc(j.job_id)+'">确认</button>';
+  ops+='<button data-a="detail" data-id="'+esc(j.job_id)+'">详情</button>';
+  if(j.view_token)ops+='<a href="/jobs/'+encodeURIComponent(j.job_id)+'/view?t='+encodeURIComponent(j.view_token)+'" target="_blank">状态页</a>';
+  const p=PR[j.priority]||['-','#64748b'];
+  tr.innerHTML='<td>'+badge(j.status)+'</td><td class="jid" title="'+esc(j.job_id)+'">'+esc(j.job_id.slice(0,8))+'</td><td><span class="badge" style="background:'+p[1]+'">'+esc(p[0])+'</span></td><td>'+esc(j.confirm_mode||'-')+'</td><td>'+esc(j.instance||'-')+'</td><td class="dim">'+esc(j.owner||'-')+'</td><td class="dim">'+esc(j.user_id||'-')+'</td><td>'+fmt(j.created_at)+'</td><td>'+dur(j)+'</td><td>'+(j.retries||0)+'</td><td class="op">'+ops+'</td>';
+  tb.appendChild(tr);
+  if(EXP[j.job_id]){
+   const d=document.createElement('tr');d.className='detail open';
+   d.innerHTML='<td colspan="11"><div class="mline"><span class="kv">实例</span>'+esc(j.instance||'-')+'</div><div class="mline"><span class="kv">场景</span>'+esc(j.scene_local_path||'-')+'</div><div class="mline"><span class="kv">网格</span>'+esc((j.mesh_names||[]).join(', ')||'-')+'</div><div class="mline"><span class="kv">骨骼</span>'+esc((j.bone_names||[]).join(', ')||'-')+'</div><div class="mline"><span class="kv">模式</span>'+esc(j.debug?'DEBUG 模拟':'真实')+'</div><div class="mline"><span class="kv">排位</span>'+(j.queue_position==null?'-':j.queue_position)+'</div><h3>日志</h3><ul class="log">'+((j.log&&j.log.length)?j.log.map(e=>'<li><span class="ts">'+esc(fmt(e.ts))+'</span><span class="step">'+esc(e.step||'')+'</span><span class="lvl lvl-'+esc(e.level||'info')+'">'+esc(e.level||'')+'</span><span>'+esc(e.note||'')+'</span></li>').join(''):'<li class="dim">（暂无日志）</li>')+'</ul><h3>结果</h3><div>'+renderRes(j)+'</div><h3>下载</h3><ul class="files">'+(renderFiles(j)||'<li class="dim">（暂无文件）</li>')+'</ul></td>';
+   tb.appendChild(d);
+  }
+ }
+}
+document.addEventListener('click',async ev=>{
+ const b=ev.target.closest('button');if(!b)return;
+ const a=b.dataset.a,id=b.dataset.id;if(!a)return;
+ if(a==='detail'){
+  if(EXP[id]){delete EXP[id]}
+  else{EXP[id]=1;if(!DET||!DET[id]){try{const r=await api('/jobs/'+encodeURIComponent(id));if(r.http===200){DET[id]=r.data;const j=ALL.find(x=>x.job_id===id);if(j)Object.assign(j,r.data)}}catch(e){}}}
+  render();return;
+ }
+ if(!id)return;
+ const label={cancel:'取消任务 '+id+' 吗？',retry:'重试任务 '+id+' 吗？',confirm:'确认「开始蒙皮」 '+id+' 吗？'}[a];
+ if(!window.confirm(label))return;
+ b.disabled=true;
+ try{
+  const r=await api('/jobs/'+encodeURIComponent(id)+'/'+a,{method:'POST'});
+  if(!r.ok||!r.data.ok){eb('操作失败：'+((r.data.error&&(r.data.error.message||r.data.error))||('HTTP '+r.http)));return}
+  clearErr();await load();
+ }catch(e){b.disabled=false}
+});
+B('btnGo').onclick=()=>{limit=500;load()};
+B('btnMore').onclick=()=>{limit+=500;load()};
+B('chkAuto').onchange=e=>{autoOn=e.target.checked};
+B('fStatus').onchange=B('fOwner').oninput=B('fKeyword').oninput=B('fPriority').onchange=B('fConfirm').onchange=()=>render();
+setInterval(()=>{if(autoOn&&document.hasFocus())load()},2e3);
+load();
+</script>
+</body>
+</html>"""
+
+
 @mcp.custom_route("/jobs/{job_id}", methods=["GET"])
 async def get_job_http(request: Request) -> Response:
     """GET /jobs/{id} — 查询状态/日志/结果（仅本人或管理员）。"""
@@ -425,7 +630,10 @@ async def list_jobs_http(request: Request) -> Response:
         )
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(_error_payload(exc), status_code=400)
-    return JSONResponse({"jobs": items, "count": len(items)})
+    payload: dict[str, Any] = {"jobs": items, "count": len(items)}
+    if is_admin:
+        payload["stats"] = job_manager.stats()
+    return JSONResponse(payload)
 
 
 @mcp.custom_route("/jobs/{job_id}/cancel", methods=["POST"])
