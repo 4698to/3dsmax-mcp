@@ -129,7 +129,7 @@ def _attach_saved_output(
     output_dir: Optional[str],
     log: Callable[[str, str, str], None],
 ) -> None:
-    """蒙皮完成后把场景另存为 {output_dir}/{job_id}.max 并挂到 result。
+    """蒙皮完成后把场景另存为 {output_dir}/{job_id}_goSkin.max 并挂到 result。
 
     产物路径/文件名写入 result 的 ``output_file``/``output_name``，由网页模板
     dlLinks 转成 /files/ 下载链接。保存失败只 warn、不判任务失败。
@@ -138,7 +138,7 @@ def _attach_saved_output(
         log("save_output", "output_dir 未配置，跳过保存蒙皮结果", "warn")
         return
     try:
-        dest = os.path.join(output_dir, f"{job.job_id}.max")
+        dest = os.path.join(output_dir, f"{job.job_id}_goSkin.max")
         saved = _save_scene_as(client, dest)
     except Exception as exc:  # noqa: BLE001
         log("save_output", f"保存蒙皮结果异常: {exc}", "warn")
@@ -458,7 +458,7 @@ def run_goskin_job(
         }
     log("confirm_start", "蒙皮完成")
 
-    # 7. 保存蒙皮结果：场景另存为 {output_dir}/{job_id}.max，/files/ 可直接下载。
+    # 7. 保存蒙皮结果：场景另存为 {output_dir}/{job_id}_goSkin.max，/files/ 可直接下载。
     #    保存失败不判任务失败（warn 继续），auto 模式不带 confirmation 提示。
     result: dict[str, Any] = {
         "ok": True,
@@ -486,7 +486,7 @@ def confirm_goskin_job_step(
     """manual 模式确认动作（§7.3）：对停在 awaiting_confirm 的任务点击「开始蒙皮」。
 
     复用 executor 持有的 MaxClient 与租约（场景已就绪）。成功后同样把场景
-    另存为 {output_dir}/{job_id}.max（与 auto 分支一致）。返回结构与
+    另存为 {output_dir}/{job_id}_goSkin.max（与 auto 分支一致）。返回结构与
     ``run_goskin_job`` 相同，供 scheduler 切换状态。
     """
     log = callback or (lambda step, note, level="info": None)

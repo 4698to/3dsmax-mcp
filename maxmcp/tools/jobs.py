@@ -517,6 +517,7 @@ function badge(st){const s=SS[st]||[st,'#2563eb'];return '<span class="badge" st
 function renderRes(j){const err=j.error||(j.result&&j.result.error);if(err)return'<div class="err">'+esc(err)+'</div>';if(j.result&&Object.keys(j.result).length){let r='';const shot=(typeof j.result==='object'&&j.result.viewport_name)?String(j.result.viewport_name).split(/[\\/]/).pop():'';if(shot)r+='<a href="/files/'+encodeURIComponent(shot)+'" target="_blank"><img src="/files/'+encodeURIComponent(shot)+'" alt="viewport" style="max-width:100%;max-height:360px;border:1px solid #334155;border-radius:8px;display:block;margin-bottom:8px"></a>';const t=typeof j.result==='string'?j.result:(j.result.message||JSON.stringify(j.result,null,2));return r+'<div class="ok">'+esc(t)+'</div>'}return'<div class="dim">（无结果）</div>'}
 function renderFiles(j){
  const L=[];
+ const LABELS={output_file:'蒙皮结果',output_name:'文件名',viewport_file:'视口截图',viewport_name:'截图文件名'};
  if(j.scene_local_path){const n=String(j.scene_local_path).split(/[\\/]/).pop();if(n)L.push('<li><a href="/files/'+encodeURIComponent(n)+'">场景文件 — '+esc(n)+'</a></li>')}
  const r=j.result||{};
  if(r&&typeof r==='object')for(const k of Object.keys(r)){
@@ -524,7 +525,7 @@ function renderFiles(j){
   let url=null;
   if(new RegExp('^https?://','i').test(v))url=v;
   else if(new RegExp('\\.(max|fbx|png|jpe?g|bmp|tga|exr|json|txt)$','i').test(v)){const n=v.split(/[\\/]/).pop();if(n)url='/files/'+encodeURIComponent(n)}
-  if(url)L.push('<li><a href="'+esc(url)+'">'+esc(k)+' — '+esc(v.split(/[\\/]/).pop()||k)+'</a></li>');
+  if(url)L.push('<li><a href="'+esc(url)+'">'+esc(LABELS[k]||k)+' — '+esc(v.split(/[\\/]/).pop()||k)+'</a></li>');
  }
  return L.join('');
 }
@@ -796,6 +797,7 @@ const SS={queued:['排队中','#2563eb'],running:['运行中','#3b82f6'],awaitin
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
 function dlLinks(j){
  const L=[];
+ const LABELS={output_file:'蒙皮结果',output_name:'文件名',viewport_file:'视口截图',viewport_name:'截图文件名'};
  if(j.scene_local_path){const n=String(j.scene_local_path).split(/[\\/]/).pop();if(n)L.push({label:'场景文件',name:n,url:'/files/'+encodeURIComponent(n)})}
  const r=j.result||{};
  if(r&&typeof r==='object')for(const k of Object.keys(r)){
@@ -803,7 +805,7 @@ function dlLinks(j){
   let url=null;
   if(new RegExp('^https?://', 'i').test(v))url=v;
   else if(new RegExp('\\.(max|fbx|png|jpe?g|bmp|tga|exr|json|txt)$', 'i').test(v)){const n=v.split(/[\\/]/).pop();if(n)url='/files/'+encodeURIComponent(n)}
-  if(url)L.push({label:k,name:v.split(/[\\/]/).pop()||k,url:url});
+  if(url)L.push({label:(LABELS[k]||k),name:v.split(/[\\/]/).pop()||k,url:url});
  }
  return L;
 }
