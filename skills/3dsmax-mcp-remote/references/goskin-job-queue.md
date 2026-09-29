@@ -33,7 +33,7 @@
 | `mesh_names` / `bone_names` | 否 | 省略 = 自动解析场景里未隐藏的网格/骨骼 |
 | `confirm_mode` | 否 | `auto`（默认，服务端自动点「开始蒙皮」）或 `manual`（停在 `awaiting_confirm` 等人确认） |
 | `priority` | 否 | `high` / `normal`（默认）/ `low` |
-| `user_id` | **是** | **审计必传**（谁提交的）。**每次提交都必须带**：MCP 参数 `user_id`，或 HTTP 请求头 `X-Maxmcp-User-Id`（**二选一**；MCP 工具参数未传时自动兜底读该请求头）。只记录到任务日志与 Job 的 `user_id` 字段，**不参与鉴权**；都不带则 `user_id` 为 null、无法追溯提交者 |
+| `user_id` | 否（尽力而为） | **审计字段**（谁提交的）。**能拿到标识就带**：MCP 参数 `user_id`，或 HTTP 请求头 `X-Maxmcp-User-Id`（**二选一**；MCP 工具参数未传/为空时自动兜底读该请求头）。**拿不到（如 agent 环境无用户标识）就空着照常提交**——空串被归一为 null，靠 owner/session 兜底审计，不会导致任务失败。用 `McpHttpSession` 脚本提交时构造传 `audit_user_id=<用户标识>` 自动带该头。只记录到任务日志与 Job 的 `user_id` 字段，**不参与鉴权** |
 
 ## 标准流程
 
@@ -45,16 +45,18 @@
 
 状态机：`queued → running → succeeded | failed | cancelled`；manual 模式多一个 `running → awaiting_confirm → running`（确认后自动跑完）。
 
-- **auto（默认）**：提交后全程不用管，轮询到 `succeeded`/`failed` 即可。
-- **manual**：看到 `awaiting_confirm` 后调 `confirm_goskin_job`；该状态下任务**继续持有实例租约**，有持有上限（默认 30min，超时自动 `cancelled`）。
-- **向用户展示 status_url（必做）**：提交成功返回的 `status_url`（`http://<host>/jobs/<id>/view?t=<token>`，**已含访问令牌**）**必须作为可点击链接放进你的回复**，并附一句说明——"打开可实时查看进度/排队位置，也可在页面上取消任务"。不要只回 job_id。
+**提交入队不需要有在线/空闲实例**：`submit_goskin_job` 只做入队，服务端按队列调度、等有可用实例（jobs/shared 池）时自动派发。**即使当前没有任何在线/空闲 Max 实例也要照常提交**——任务会保持在 `queued` 排队等待，实例一释放就自动开始；无实例只是排队更久，不是提交失败。**不要**用"没有在线或空闲实例"当理由拒绝入队，也**不要**先查实例列表再决定是否提交。
+
+- **auto（默认）**：提交后**不要询问用户"是否开始蒙皮"**——服务端自动点「开始蒙皮」并跑完，Agent 直接展示 status_url 后轮询到 `succeeded`/`failed` 即可。
+- **manual**：看到 `awaiting_confirm` 后（征得用户同意再）调 `confirm_goskin_job`；该状态下任务**继续持有实例租约**，有持有上限（默认 30min，超时自动 `cancelled`）。
+- **向用户展示 status_url（必做）**：提交成功返回的 `status_url`（`http://<host>/jobs/<id>/view?t=<token>`，**已含访问令牌**）**必须作为可点击链接放进你的回复**，并附一句说明——"打开可实时查看进度/排队位置，也可在页面上取消任务"。不要只回 job_id，**也不要在 auto 模式下附带"是否开始蒙皮"的询问**。
 - 轮询：MCP 工具往返自带延迟，多调几次 `get`/`list` 即可；没有服务端推送。
 - 取消：`queued`/`awaiting_confirm` 立即终态；`running` 在下一个安全点停止（executor 每步检查）。
 
 ## 权限与错误
 
 - 查询/取消/确认**只允许任务 owner（提交的 MCP 会话 / `X-Client-Id`）和管理员**（`MAXMCP_JOB_ADMIN_IDS`）。看别人的任务 → `JOB_PERMISSION_DENIED`。
-- 审计 user_id（**每次提交必带**）：`submit_goskin_job` 参数传 `user_id`（MCP），HTTP 提交带 `X-Maxmcp-User-Id` 请求头。**仅记录到任务日志/Job 字段**，供追踪"谁提交的"，不改变 owner；都不传则 `user_id` 为 null。
+- 审计 user_id（**尽力而为，不阻塞提交**）：`submit_goskin_job` 参数尽量传 `user_id`（HTTP 提交带 `X-Maxmcp-User-Id` 头；`McpHttpSession` 构造传 `audit_user_id` 自动带该头）。**仅记录到任务日志/Job 字段**，供追踪"谁提交的"，不改变 owner；拿不到标识就空着提交，空串归一为 null、靠 owner/session 兜底审计。
 - 结构化错误（同 instance-locks 约定，`retryable=false` 就**不要重试**）：
 
 | code | 含义 | 动作 |
@@ -75,7 +77,7 @@
 | `POST /jobs/{job_id}/cancel` | 取消 |
 | `POST /jobs/{job_id}/confirm` | manual 确认 |
 
-owner 取 `X-Client-Id` 请求头，缺失走匿名公共队列（上限 `MAXMCP_JOB_ANON_QUEUE_MAX`，默认 3）。**每次提交必须同时带 `X-Maxmcp-User-Id` 头**做审计记录（写入任务日志/`user_id` 字段）。
+owner 取 `X-Client-Id` 请求头，缺失走匿名公共队列（上限 `MAXMCP_JOB_ANON_QUEUE_MAX`，默认 3）。**每次提交尽量带 `X-Maxmcp-User-Id` 头**做审计记录（写入任务日志/`user_id` 字段）；agent 拿不到用户标识时可不带，不影响提交。
 
 ## 队列专用实例（可选配置）
 

@@ -84,9 +84,10 @@ Path tips:
 workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user_id=<你的用户标识>)  →  轮询 get_goskin_job(job_id) 直到终态
 ```
 
-- **提交必须带 user_id（必做）**：每次 `submit_goskin_job` 都要传 `user_id=<你的用户标识>`（HTTP 提交则带 `X-Maxmcp-User-Id` 请求头），用于审计追踪提交者；不影响鉴权，不传则任务 `user_id` 为 null。
-- `confirm_mode="auto"`（默认）提交后全程自动；`manual` 停在 `awaiting_confirm` 需 `confirm_goskin_job` 放行。
+- **user_id 尽力而为（审计字段，不影响提交）**：`submit_goskin_job` **尽量**传 `user_id=<你的用户标识>`（HTTP 提交带 `X-Maxmcp-User-Id` 头），用于审计追踪提交者、不影响鉴权。**拿到标识就带，拿不到（如 `os.environ['CC_SESSION_KEY']` 为空）照常提交、不要中止**——空串被服务端归一为 null、靠 owner/session 兜底审计，不会导致任务失败。用 `McpHttpSession` 脚本提交的，构造时传 `audit_user_id=<你的用户标识>`，会随每个请求自动带 `X-Maxmcp-User-Id` 头，参数空时也能兜底记录。
+- `confirm_mode="auto"`（默认）提交后**全程自动、无需任何人确认**：**不要询问用户"是否开始蒙皮"**，直接展示 status_url 并轮询到终态；`manual` 停在 `awaiting_confirm` 时才需（征得用户同意后）`confirm_goskin_job` 放行。
 - `scene_local_path` 只传上传返回的 `local_path`，不要把 `url` 或文件名传进去。
+- **提交不要求当前有可用实例**：`submit_goskin_job` 只需入队——**即使当前没有在线/空闲 Max 实例也照常提交**，任务会在队列里等实例释放后再跑。**不要**先检查"有无空闲实例"来决定是否提交，也**不要**因无空闲实例拒绝入队（无实例只是排队更久，不是提交失败）。
 - **向用户展示 status_url（必做）**：提交成功返回的 `status_url` 已含访问令牌，**必须以可点击链接放进你的回复**并说明——打开可实时查看进度/排队位置、可在页面上取消任务；不要只回 job_id。
 - 提交前不要手动 `acquire_instance`，会和任务抢实例；查询/取消/确认仅本人 + 管理员。
 - 完整用法见下节「批量任务队列」及 [references/goskin-job-queue.md](references/goskin-job-queue.md)；OCR 细节见 [references/goskin-ocr-click.md](references/goskin-ocr-click.md)。
@@ -99,10 +100,11 @@ workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user
 workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user_id=<你的用户标识>)  →  轮询 get_goskin_job(job_id)
 ```
 
-- `confirm_mode="auto"`（默认）：提交后全程自动，轮询到 `succeeded`/`failed` 即可。
-- `confirm_mode="manual"`：停在 `awaiting_confirm` 持租约等确认，需 `confirm_goskin_job` 放行（有 30min 持有上限）。
-- **提交必须带 user_id（必做）**：`submit_goskin_job` 传 `user_id`，HTTP 提交带 `X-Maxmcp-User-Id` 头。
-- 审计 user_id（**每次提交必带**）：`submit_goskin_job` 参数传 `user_id`（MCP），HTTP 提交带 `X-Maxmcp-User-Id` 请求头；只记录到任务日志与 Job 的 `user_id` 字段，用于追踪谁提交的，不影响 owner/鉴权。都不传则 `user_id` 为 null。
+- `confirm_mode="auto"`（默认）：提交后**全程自动，不要询问用户"是否开始蒙皮"**，直接展示 status_url 并轮询到 `succeeded`/`failed`。
+- `confirm_mode="manual"`：停在 `awaiting_confirm` 持租约等确认，此时才需（征得用户同意后）调 `confirm_goskin_job` 放行（有 30min 持有上限）。
+- **提交不要求当前有可用实例**：队列任务只需入队，**当前无在线/空闲实例也照常提交**，任务排队等待实例释放后再跑；不要因无空闲实例拒绝入队。
+- **user_id 尽力而为（审计字段）**：`submit_goskin_job` **尽量**传 `user_id`（HTTP 提交带 `X-Maxmcp-User-Id` 头），拿不到标识就空着照常提交——空串归一为 null，靠 owner/session 兜底审计；用 `McpHttpSession` 脚本提交时构造传 `audit_user_id=<你的用户标识>` 自动带该头兜底。
+- 审计 user_id（**尽力而为**）：`submit_goskin_job` 参数尽量传 `user_id`（MCP），HTTP 提交带 `X-Maxmcp-User-Id` 请求头；只记录到任务日志与 Job 的 `user_id` 字段，用于追踪谁提交的，不影响 owner/鉴权。都不传则 `user_id` 为 null（不阻塞提交，靠 owner/session 兜底）。
 - **向用户展示 status_url（必做）**：提交成功返回的 `status_url` 已含访问令牌，**必须以可点击链接放进你的回复**并说明——打开可实时查看进度/排队位置、可在页面上取消任务；不要只回 job_id。
 - 查询/取消/确认仅本人 + 管理员（`MAXMCP_JOB_ADMIN_IDS`）；别在提交前手动 `acquire_instance`，会和任务抢实例。
 - 5 个工具：`submit_goskin_job` / `get_goskin_job` / `list_goskin_jobs` / `cancel_goskin_job` / `confirm_goskin_job`；HTTP 等价 `POST /jobs` 等。完整用法见 [references/goskin-job-queue.md](references/goskin-job-queue.md)。

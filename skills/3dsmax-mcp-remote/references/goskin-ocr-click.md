@@ -17,7 +17,7 @@ OCR / 实例表 / workspace 由 **MCP 服务器 B** 的运维配置；A 用 `che
 1. **先选定 Max**，再 OCR / 场景操作。空闲实例 >1 时必须让用户选，禁止自动抢第一台。
 2. 优先 `goskin_*`，不要反复裸调 `click_plugin_dialog_button`。
 3. 打开插件时 **`menu`=顶栏、`item`=下拉项**（默认 `自动蒙皮` → `GoSkinning`），**禁止对调**。
-4. 用户确认 `goskin_run_skin` 摘要前，**绝不**点「开始蒙皮」。
+4. 用户确认 `goskin_run_skin` 摘要前，**绝不**点「开始蒙皮」。**（仅限本页低层 OCR 流程；队列任务 `submit_goskin_job` 的确认由 `confirm_mode` 控制——auto 模式服务端自动点「开始蒙皮」，agent 无需也不应询问用户，见 [goskin-job-queue.md](goskin-job-queue.md)。）**
 5. 先聚焦列表槽位「(选中后在编辑区添加)」再点「选定」。
 6. 用 OCR 计数（`模型：N` / `关节：N`）校验，不单信点击 `ok`。
 7. 场景选择为空时禁止「选定」。

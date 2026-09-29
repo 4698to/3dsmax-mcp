@@ -197,7 +197,7 @@ python /root/.claude/skills/3dsmax-mcp-remote/scripts/list_online_instances.py \
   --url "$MAXMCP_URL"
 ```
 
-若没有在线或空闲实例，不得猜测、虚构结果或擅自切换到未确认实例；应如实说明当前无法执行审计。
+若没有在线或空闲实例，不得猜测、虚构结果或擅自切换到未确认实例；应如实说明当前无法执行审计。**（边界：本规则仅适用于"实时审计"这类必须当场查询 Max 场景的操作；`submit_goskin_job` 队列提交不受此限——队列只需入队，无在线/空闲实例也照常提交，任务会排队等待实例释放，见 SKILL.md「GoSkin」节。）**
 
 ### 3. 选择并绑定目标实例
 
