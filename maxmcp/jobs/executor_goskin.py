@@ -35,7 +35,10 @@ from dialog_monitor.goskin_flow import (  # noqa: E402
     ensure_goskin_ready,
     run_goskin_skin,
 )
-from dialog_monitor.click_button import restore_max_window  # noqa: E402
+from dialog_monitor.click_button import (  # noqa: E402
+    max_window_state,
+    restore_max_window,
+)
 
 from ..helpers.maxscript import safe_value  # noqa: E402
 from .job_model import JobStatus  # noqa: E402
@@ -198,19 +201,25 @@ def run_goskin_job(
             return {"ok": False, "status": JobStatus.FAILED, "code": "timeout"}
         return None
 
-    # 1. 恢复主窗口（最小化时 OCR/点击均失效；§7.1 步骤 2）
+    # 1. 恢复主窗口（最小化时 OCR/点击均失效；§7.1 步骤 2）。
+    #    仅最小化时才需要 SW_RESTORE；全屏/最大化窗口保持原状——
+    #    SW_RESTORE 会把最大化窗口也恢复为 normal（窗口化），并可能
+    #    触发窗口重绘时序问题导致后续 OCR 截图失败。
     aborted = _abort("restore_window")
     if aborted is not None:
         return aborted
     try:
-        restored = restore_max_window(client=client, restore_mode="restore")
-    except Exception as exc:  # noqa: BLE001 恢复失败不阻塞任务，继续尝试
-        log("restore_window", f"恢复窗口异常（继续尝试）: {exc}", "warn")
-    else:
-        if restored.get("ok"):
-            log("restore_window", "3ds Max 主窗口已恢复")
+        win_state = max_window_state(client=client)
+        if win_state.get("iconic"):
+            restored = restore_max_window(client=client, restore_mode="restore")
+            if restored.get("ok"):
+                log("restore_window", "3ds Max 主窗口已从最小化恢复")
+            else:
+                log("restore_window", f"恢复窗口未确认成功: {restored.get('error')}", "warn")
         else:
-            log("restore_window", f"恢复窗口未确认成功: {restored.get('error')}", "warn")
+            log("restore_window", "主窗口可见，保持当前窗口状态（不做 SW_RESTORE）")
+    except Exception as exc:  # noqa: BLE001 恢复失败不阻塞任务，继续尝试
+        log("restore_window", f"检查/恢复窗口异常（继续尝试）: {exc}", "warn")
 
     # 2. 加载场景（可选；scene_local_path 为空则沿用当前场景）
     if job.scene_local_path:

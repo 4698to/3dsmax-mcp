@@ -845,7 +845,11 @@ def click_menu_path(
         if attempt > 0:
             time.sleep(0.7)
             try:
-                restore_max_window(client=client)
+                # 仅最小化时还原；SW_RESTORE 会把最大化/全屏窗口窗口化，
+                # 且窗口变化中的截图容易导致 OCR 识别失败。
+                st = max_window_state(client=client)
+                if st.get("iconic"):
+                    restore_max_window(client=client)
             except Exception:
                 pass
             time.sleep(0.25)
