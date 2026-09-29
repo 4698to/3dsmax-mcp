@@ -576,6 +576,8 @@ ul.log li{font-size:13px;padding:3px 0;border-bottom:1px dashed #334155}
 .btn-danger:hover{background:#b91c1c}.btn-danger:disabled{opacity:.5;cursor:not-allowed}
 .btn-retry{display:none;background:#16a34a;color:#fff;border:0;border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;margin-left:8px}
 .btn-retry:hover{background:#15803d}.btn-retry:disabled{opacity:.5;cursor:not-allowed}
+.shotlink{display:block;margin-bottom:10px}
+.shot{display:block;max-width:100%;max-height:420px;border:1px solid #334155;border-radius:8px;background:#0f172a}
 </style>
 </head>
 <body>
@@ -637,7 +639,7 @@ async function rf(){
   if(!(j.log||[]).length){const li=document.createElement('li');li.textContent='（暂无日志）';ul.appendChild(li)}
   const res=document.getElementById('result');res.innerHTML='';const err=j.error||(j.result&&j.result.error);
   if(err)res.innerHTML='<div class="err">'+esc(err)+'</div>';
-  else if(j.result&&Object.keys(j.result).length){const t2=typeof j.result==='string'?j.result:(j.result.message||JSON.stringify(j.result,null,2));res.innerHTML='<div class="ok">'+esc(t2)+'</div>'}
+  else if(j.result&&Object.keys(j.result).length){let rhtml='';const shot=(typeof j.result==='object'&&j.result.viewport_name)?String(j.result.viewport_name).split(/[\\/]/).pop():'';if(shot)rhtml+='<a class="shotlink" href="/files/'+encodeURIComponent(shot)+'" target="_blank"><img class="shot" src="/files/'+encodeURIComponent(shot)+'" alt="viewport"></a>';const t2=typeof j.result==='string'?j.result:(j.result.message||JSON.stringify(j.result,null,2));rhtml+='<div class="ok">'+esc(t2)+'</div>';res.innerHTML=rhtml}
   else if(TERMINAL.includes(j.status))res.innerHTML='<div class="dim">（无结果）</div>';
   if(TERMINAL.includes(j.status))stop();
  }catch(e){eb('网络错误：'+e.message)}
