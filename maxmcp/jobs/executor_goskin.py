@@ -6,7 +6,7 @@ executor **不经过** server.py 的 SessionRoutedClient（它按 MCP 会话路�
 ``dialog_monitor.goskin_flow`` 的函数（这些函数本就要 client 参数，见
 maxmcp/tools/goskin.py）。任务线程在每个安全点（§7.2）检查取消与整体超时。
 """
-
+#2026-09-29
 from __future__ import annotations
 
 import json
