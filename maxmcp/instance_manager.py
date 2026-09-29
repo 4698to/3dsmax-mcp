@@ -745,6 +745,8 @@ class InstanceManager:
                         rec = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    if not isinstance(rec, dict):
+                        continue  # 非对象行（null/数组等）跳过，避免 .get 崩溃
                     last_seen = rec.get("lastSeen")
                     if not isinstance(last_seen, (int, float)):
                         continue
