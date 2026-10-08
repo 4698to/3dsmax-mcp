@@ -894,9 +894,12 @@ class JobManager:
 
     def _notify_job_completion_locked(self, job: Job, status: str) -> None:
         parts = (job.user_id or "").split(":")
-        if len(parts) != 3 or parts[0] != "99U":
+        if len(parts) == 3 and parts[0] == "99U":
+            _, sender, receiver = parts
+        elif len(parts) == 4 and parts[0] == "bridge" and parts[2] == "ai-staff":
+            _, receiver, _, sender = parts
+        else:
             return
-        _, sender, receiver = parts
         if not sender or not receiver:
             return
         if not os.environ.get("99U_PASSWORD"):
