@@ -7,6 +7,7 @@ import json
 import mimetypes
 import os
 import secrets
+import struct
 import sys
 import time
 import urllib.error
@@ -17,6 +18,8 @@ from xml.sax.saxutils import quoteattr
 
 UC_HOST = "https://aqapi.cn.ndhy.com"
 IM_HOST = "https://imcoreapis.cn.ndhy.com"
+CONV_FILE_HOST = "https://im-conv-file.sdp.cn.ndhy.com"
+CS_HOST = "https://cs.cn.ndhy.com"
 TIME_URL = "https://uc-gateway.cn.ndhy.com/v1.1/time"
 SDP_APP_ID = "b4fb92a0-af7f-49c2-b270-8f62afac1133"
 
@@ -80,9 +83,9 @@ def get_server_time():
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def mac_authorization(method, path_and_query, token, server_time):
+def mac_authorization(method, path_and_query, token, server_time, host="imcoreapis.cn.ndhy.com"):
     nonce = f"{int(server_time.timestamp() * 1000)}:{secrets.token_hex(4)}"
-    normalized = f"{nonce}\n{method.upper()}\n{path_and_query}\nimcoreapis.cn.ndhy.com\n"
+    normalized = f"{nonce}\n{method.upper()}\n{path_and_query}\n{host}\n"
     signature = hmac.new(
         token["mac_key"].encode("utf-8"), normalized.encode("utf-8"), hashlib.sha256
     ).digest()
@@ -139,13 +142,14 @@ def send_message(sender, password, org_name, receiver, message):
     return conv_id, response
 
 
-def im_request(token, server_time, path, method="GET", body=None):
+def conv_file_request(token, server_time, path, method="GET", body=None):
     headers = {
-        "Authorization": mac_authorization(method, path, token, server_time),
-        "platform-type": "1",
+        "Authorization": mac_authorization(
+            method, path, token, server_time, host="im-conv-file.sdp.cn.ndhy.com"
+        ),
         "sdp-app-id": SDP_APP_ID,
     }
-    return request_json(f"{IM_HOST}{path}", method=method, body=body, headers=headers)
+    return request_json(f"{CONV_FILE_HOST}{path}", method=method, body=body, headers=headers)
 
 
 def encode_multipart(fields, filename, file_data, mime_type):
@@ -172,7 +176,13 @@ def encode_multipart(fields, filename, file_data, mime_type):
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
-def send_file(sender, password, org_name, receiver, file_path, upload_only=False):
+def image_dimensions(file_data):
+    if file_data.startswith(b"\x89PNG\r\n\x1a\n") and len(file_data) >= 24:
+        return struct.unpack(">II", file_data[16:24])
+    return 0, 0
+
+
+def send_file(sender, password, org_name, receiver, file_path, upload_only=False, image=False):
     print("正在读取文件…", file=sys.stderr, flush=True)
     if not os.path.isfile(file_path):
         raise RuntimeError(f"文件不存在：{file_path}")
@@ -181,6 +191,13 @@ def send_file(sender, password, org_name, receiver, file_path, upload_only=False
         file_data = source.read()
     file_size = len(file_data)
     file_md5 = hashlib.md5(file_data).hexdigest()
+    file_mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    if image and not file_mime.startswith("image/"):
+        raise RuntimeError("--image 仅支持 MIME 类型为 image/* 的文件")
+    image_mime = file_mime.removeprefix("image/") if image else ""
+    sub_dir = "img" if image else "file"
+    biz = 1 if image else 0
+    biz_string = str(biz)
 
     print("正在登录 99U…", file=sys.stderr, flush=True)
     token = request_json(
@@ -208,26 +225,26 @@ def send_file(sender, password, org_name, receiver, file_path, upload_only=False
         raise RuntimeError("该会话当前不允许发送消息（msgsendflag=false）")
     conv_id = str(conversation["conv_id"])
 
-    conv_path = "/conv/" + urllib.parse.quote(conv_id, safe="")
-
-    print("正在获取会话文件根路径…", file=sys.stderr, flush=True)
-    roots = im_request(token, server_time, f"{conv_path}/roots")
-    root_path = roots["root_path"].rstrip("/")
-    storage_path = f"{root_path}/file/{filename}"
+    conv_path = "/v0.2/conv/" + urllib.parse.quote(conv_id, safe="")
+    storage_path = f"/im_conversation_file/{conv_id}/{sub_dir}/{filename}"
     print("正在申请文件上传凭证…", file=sys.stderr, flush=True)
-    token_info = im_request(
+    token_info = conv_file_request(
         token,
         server_time,
         f"{conv_path}/files/actions/get_token",
         method="POST",
-        body={"type": "UPLOAD_NORMAL", "biz": "0", "path": storage_path},
+        body={
+            "type": "UPLOAD_DIRECT",
+            "params": "supportCustomHeader=true&sdk=js&uploadChoiceCDN=0",
+            "biz": biz,
+            "path": storage_path,
+        },
     )
-    token_info = token_info.get("token_info", token_info)
     upload_token = token_info.get("token")
     policy = token_info.get("policy")
-    upload_date = token_info.get("date") or token_info.get("date_time")
+    upload_date = token_info.get("date_time")
     if not upload_token or not policy or not upload_date:
-        raise RuntimeError("原生 get_token 响应缺少 token、policy 或 date")
+        raise RuntimeError("文件上传授权响应缺少 token、policy 或 date_time")
 
     fields = {
         "path": storage_path,
@@ -254,7 +271,7 @@ def send_file(sender, password, org_name, receiver, file_path, upload_only=False
     })
     print(f"正在上传文件（{file_size} 字节）…", file=sys.stderr, flush=True)
     upload_result = json.loads(request_bytes(
-        f"https://cs.cn.ndhy.com/v0.1/upload/actions/direct?{query}",
+        f"{CS_HOST}/v0.1/upload/actions/direct?{query}",
         method="POST",
         body=body,
         headers={"Content-Type": content_type},
@@ -272,30 +289,66 @@ def send_file(sender, password, org_name, receiver, file_path, upload_only=False
             body=file_data,
             headers=upload_params.get("upload_headers", {}),
         )
-        if upload_only:
-            return conv_id, dentry_id, {"upload_only": True}
-    elif upload_only:
+    if upload_only:
         return conv_id, dentry_id, {"upload_only": True}
 
-    print("上传完成，正在登记文件…", file=sys.stderr, flush=True)
-    im_request(
+    inode_id = upload_result.get("inode_id")
+    if not inode_id:
+        raise RuntimeError("文件存储服务未返回 inode_id，无法按接口流程标记文件有效")
+    print("上传完成，正在标记文件有效…", file=sys.stderr, flush=True)
+    valid_info = conv_file_request(
+        token,
+        server_time,
+        f"{conv_path}/files/actions/get_token",
+        method="POST",
+        body={
+            "type": "VALID",
+            "params": f"dentryId={dentry_id}&inodeId={inode_id}&scope=1",
+            "biz": biz_string,
+            "path": storage_path,
+        },
+    )
+    valid_query = urllib.parse.urlencode({
+        "dentryId": dentry_id,
+        "inodeId": inode_id,
+        "scope": "1",
+        "token": valid_info["token"],
+        "policy": valid_info["policy"],
+        "date": valid_info["date_time"],
+    })
+    request_bytes(
+        f"{CS_HOST}/v0.1/dentries/actions/valid?{valid_query}",
+        method="PUT",
+        body=b"",
+    )
+
+    print("文件已有效，正在登记文件…", file=sys.stderr, flush=True)
+    conv_file_request(
         token,
         server_time,
         f"{conv_path}/files",
         method="POST",
-        body={"biz": "0", "dentry_id": dentry_id, "name": uploaded_name},
+        body={"biz": biz_string, "dentry_id": str(dentry_id), "name": uploaded_name},
     )
 
-    print("文件已登记，正在发送文件消息…", file=sys.stderr, flush=True)
+    print("文件已登记，正在发送图片消息…" if image else "文件已登记，正在发送文件消息…", file=sys.stderr, flush=True)
     message_path = f"/v1.0/api/conversations/{urllib.parse.quote(conv_id, safe='')}/messages"
     common_headers["Authorization"] = mac_authorization("POST", message_path, token, server_time)
     now_ns = time.time_ns()
     msg_seq = ((now_ns // 1_000_000_000) << 32) | (now_ns % 1_000_000_000 & 0x7FFFFFFF)
-    xml_content = (
-        "Content-Type: file/xml\r\n\r\n"
-        f"<file src={quoteattr(str(dentry_id))} name={quoteattr(uploaded_name)} "
-        f"size={quoteattr(str(file_size))} compressed=\"\" md5={quoteattr(file_md5)} />"
-    )
+    if image:
+        width, height = image_dimensions(file_data)
+        xml_content = (
+            "Content-Type:img/xml\r\n\r\n"
+            f'<img src="dentry://{dentry_id}" mime="{image_mime}" width="{width}" '
+            f'height="{height}" size="{file_size}" alt="" md5="{file_md5}" fullimage="true" />'
+        )
+    else:
+        xml_content = (
+            "Content-Type: file/xml\r\n\r\n"
+            f"<file src={quoteattr(str(dentry_id))} name={quoteattr(uploaded_name)} "
+            f"size={quoteattr(str(file_size))} compressed=\"\" md5={quoteattr(file_md5)} />"
+        )
     response = request_json(
         f"{IM_HOST}{message_path}",
         method="POST",
@@ -312,13 +365,16 @@ def main():
     parser.add_argument("receiver", help="接收方 99U 用户 ID")
     parser.add_argument("message", nargs="?", help="消息内容；省略时交互输入")
     parser.add_argument("--file", help="上传并发送本地文件")
-    parser.add_argument("--upload-only", action="store_true", help="仅上传文件，不确认、登记或发送；须与 --file 同用")
+    parser.add_argument("--image", action="store_true", help="将 --file 按图片消息上传并发送（仅 image/* 类型）")
+    parser.add_argument("--upload-only", action="store_true", help="仅上传文件，不登记或发送；须与 --file 同用")
     parser.add_argument("--sender", default=os.getenv("99U_LOGIN_NAME", "10030473"), help="发送账号")
     parser.add_argument("--org", default=os.getenv("99U_ORG_NAME", "ND"), help="组织名")
     args = parser.parse_args()
 
     if args.upload_only and not args.file:
         parser.error("--upload-only 必须与 --file 同用")
+    if args.image and not args.file:
+        parser.error("--image 必须与 --file 同用")
     if args.file and args.message is not None:
         parser.error("--file 与文本消息不能同时使用")
     if args.file and not os.path.isfile(args.file):
@@ -337,13 +393,13 @@ def main():
         if args.file:
             conv_id, dentry_id, response = send_file(
                 args.sender, password, args.org, args.receiver, args.file,
-                upload_only=args.upload_only,
+                upload_only=args.upload_only, image=args.image,
             )
             if args.upload_only:
-                print(f"上传测试成功：会话 {conv_id}，文件 ID {dentry_id}；未确认、登记或发送")
+                print(f"上传测试成功：会话 {conv_id}，文件 ID {dentry_id}；未登记或发送")
             else:
                 print(
-                    f"文件发送成功：会话 {conv_id}，文件 ID {dentry_id}，"
+                    f"{'图片' if args.image else '文件'}发送成功：会话 {conv_id}，文件 ID {dentry_id}，"
                     f"消息 ID {response.get('conv_msg_id', '未知')}"
                 )
         else:
