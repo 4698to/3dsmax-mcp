@@ -900,7 +900,7 @@ class JobManager:
 
     def _notify_job_completion_locked(self, job: Job, status: str) -> None:
         parts = (job.user_id or "").split(":")
-        if len(parts) == 3 and parts[0] == "99U":
+        if len(parts) == 3 and parts[0].lower() == "99u":
             _, sender, receiver = parts
         elif len(parts) == 4 and parts[0] == "bridge" and parts[2] == "ai-staff":
             _, receiver, _, sender = parts
