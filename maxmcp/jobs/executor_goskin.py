@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -129,7 +130,7 @@ def _attach_saved_output(
     output_dir: Optional[str],
     log: Callable[[str, str, str], None],
 ) -> None:
-    """蒙皮完成后把场景另存为 {output_dir}/{job_id}_goSkin.max 并挂到 result。
+    """蒙皮完成后把场景另存为 {output_dir}/{场景名}_goSkin.max 并挂到 result。
 
     产物路径/文件名写入 result 的 ``output_file``/``output_name``，由网页模板
     dlLinks 转成 /files/ 下载链接。保存失败只 warn、不判任务失败。
@@ -138,7 +139,15 @@ def _attach_saved_output(
         log("save_output", "output_dir 未配置，跳过保存蒙皮结果", "warn")
         return
     try:
-        dest = os.path.join(output_dir, f"{job.job_id}_goSkin.max")
+        source_name = Path(job.scene_local_path).name if job.scene_local_path else ""
+        source_name = re.sub(r"^[0-9a-fA-F]{8}_", "", source_name)
+        source_path = Path(source_name)
+        output_name = (
+            f"{source_path.stem}_goskin{source_path.suffix}"
+            if source_name
+            else f"{job.job_id}_goskin.max"
+        )
+        dest = os.path.join(output_dir, output_name)
         saved = _save_scene_as(client, dest)
     except Exception as exc:  # noqa: BLE001
         log("save_output", f"保存蒙皮结果异常: {exc}", "warn")
@@ -458,7 +467,7 @@ def run_goskin_job(
         }
     log("confirm_start", "蒙皮完成")
 
-    # 7. 保存蒙皮结果：场景另存为 {output_dir}/{job_id}_goSkin.max，/files/ 可直接下载。
+    # 7. 保存蒙皮结果：以输入场景名加 _goskin 后缀保存，/files/ 可直接下载。
     #    保存失败不判任务失败（warn 继续），auto 模式不带 confirmation 提示。
     result: dict[str, Any] = {
         "ok": True,
