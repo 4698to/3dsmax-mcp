@@ -22,12 +22,15 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
+from ..helpers.file_http import file_download_url
 from ..instance_manager import (
     InstanceBusyError,
     InstanceError,
@@ -857,12 +860,13 @@ class JobManager:
                 result = dict(result)
                 result["status"] = status
             self._mark_terminal_locked(
-                job_id, status, code=result.get("code"), error=result.get("error")
+                job_id, status, code=result.get("code"), error=result.get("error"), notify=False
             )
             # 上面先把内存置为失败占位（与 store 一致），这里再覆盖为执行器
             # 返回的真实 result（output_file/viewport_file 等），保持内存=JSONL 末条。
             job.result = result
             self._store.set_result(job_id, result)
+            self._notify_job_completion_locked(job, status)
             self._holds.pop(job_id, None)
             if self._cleanup_files and job.scene_local_path:
                 try:
@@ -879,6 +883,7 @@ class JobManager:
         *,
         code: Optional[str] = None,
         error: Optional[Any] = None,
+        notify: bool = True,
     ) -> None:
         job = self._jobs.get(job_id)
         if job is None or job.is_terminal():
@@ -890,7 +895,8 @@ class JobManager:
         job.result = term_result
         self._store.set_status(job_id, status, at=now)
         self._store.set_result(job_id, term_result)
-        self._notify_job_completion_locked(job, status)
+        if notify:
+            self._notify_job_completion_locked(job, status)
 
     def _notify_job_completion_locked(self, job: Job, status: str) -> None:
         parts = (job.user_id or "").split(":")
@@ -912,6 +918,17 @@ class JobManager:
             JobStatus.CANCELLED: "已取消",
         }
         message = f"GoSkin 任务{labels.get(status, status)}：{job.job_id}"
+        output_file = job.result.get("output_file")
+        download_url = file_download_url(
+            output_file,
+            workspace_dir=resolve_workspace_dir(),
+            comms_dir=Path(tempfile.gettempdir()) / "3dsmax-mcp",
+        )
+        if download_url:
+            public_base = os.environ.get("MAXMCP_PUBLIC_URL", "").strip().rstrip("/")
+            if public_base:
+                download_url = f"{public_base}/files/{quote(Path(output_file).name, safe='')}"
+            message += f"\n结果文件：{download_url}"
         error = job.result.get("error")
         if error:
             message += f"\n原因：{error}"

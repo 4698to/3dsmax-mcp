@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import html
 import json
@@ -30,7 +31,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from ..helpers.file_http import sanitize_filename
-from ..instance_manager import InstanceReservedError
+from ..instance_manager import InstanceReservedError, manager as instance_manager
 from ..jobs import (
     JobNotFoundError,
     JobPermissionError,
@@ -398,6 +399,25 @@ async def admin_view_http(request: Request) -> Response:
     return resp
 
 
+@mcp.custom_route("/jobs/admin/instances", methods=["GET"])
+async def admin_instances_http(request: Request) -> Response:
+    """管理员专用：实例连通状态与占用情况。"""
+    owner = _client_id(request)
+    cookie = request.cookies.get("mcp_job_admin_token") or ""
+    if not (job_manager.is_admin(owner) or job_manager.is_admin(cookie)):
+        return JSONResponse({"ok": False, "error": "管理令牌无效"}, status_code=403)
+    try:
+        instances = await asyncio.to_thread(instance_manager.list_instances)
+        queue_depth = instance_manager.queue_depth()
+        queue_max = instance_manager.acquire_queue_max
+    except Exception as exc:  # noqa: BLE001
+        _log.exception("admin instance status failed")
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+    return JSONResponse(
+        {"instances": instances, "queue_depth": queue_depth, "queue_max": queue_max}
+    )
+
+
 _ADMIN_PAGE_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -409,6 +429,13 @@ body{margin:0;background:#0f172a;color:#e2e8f0;font:14px system-ui,'Segoe UI',sa
 .wrap{max-width:1320px;margin:0 auto;padding:16px}
 h1{font-size:18px;margin:0 0 12px}
 .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.section-title{font-size:15px;margin:16px 0 8px}
+.instances{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-bottom:16px}
+.instance{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:10px 12px;min-width:0}
+.instance-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.instance-name{font-weight:600;overflow-wrap:anywhere}
+.instance-meta{color:#94a3b8;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+.instance-error{color:#fca5a5;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
 .stat{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:8px 14px;min-width:86px}
 .stat b{display:block;font-size:20px;line-height:1.2}
 .stat span{color:#94a3b8;font-size:12px}
@@ -452,6 +479,8 @@ ul.log li{font-size:13px;padding:3px 0;border-bottom:1px dashed #334155}
 <div id="errbox"></div>
 <h1>GoSkin 任务管理台</h1>
 <div id="stats" class="stats"></div>
+<h2 class="section-title">Max 实例</h2>
+<div id="instances" class="instances"><div class="dim">加载中…</div></div>
 <div class="filters">
 <select id="fStatus"><option value="">全部状态</option><option value="queued">queued</option><option value="running">running</option><option value="awaiting_confirm">awaiting_confirm</option><option value="succeeded">succeeded</option><option value="failed">failed</option><option value="cancelled">cancelled</option></select>
 <select id="fPriority"><option value="">全部优先级</option><option value="high">high</option><option value="normal">normal</option><option value="low">low</option></select>
@@ -487,6 +516,30 @@ async function api(path,opts){
  if(r.status===403){eb('管理令牌无效：请用 /jobs/admin?token=… 打开');throw new Error('403')}
  return {http:r.status,ok:r.ok,data:j}
 }
+async function loadInstances(){
+ const box=B('instances');
+ try{
+  const r=await api('/jobs/admin/instances');
+  if(r.http!==200){box.innerHTML='<div class="instance-error">实例状态加载失败 HTTP '+esc(r.http)+'</div>';return}
+  INSTANCES=r.data.instances||[];
+  renderInstances(r.data);
+ }catch(e){box.innerHTML='<div class="instance-error">实例状态加载失败：'+esc(e.message||e)+'</div>'}
+}
+function renderInstances(data){
+ const box=B('instances'),items=data.instances||[];
+ let out='<div class="instance-meta" style="grid-column:1/-1">实例等待队列：'+esc(data.queue_depth||0)+' / '+esc(data.queue_max==null?'-':data.queue_max)+'</div>';
+ if(!items.length){box.innerHTML=out+'<div class="instance"><div class="instance-meta">未发现 Max 实例</div></div>';return}
+ for(const i of items){
+  const online=i.online===true?['在线','#16a34a']:i.online===false?['离线','#dc2626']:['未知','#64748b'];
+  const busy=i.busy?'占用中':'空闲';
+  out+='<div class="instance"><div class="instance-head"><span class="instance-name">'+esc(i.name)+'</span><span class="badge" style="background:'+online[1]+'">'+online[0]+'</span></div>'+
+   '<div class="instance-meta">'+esc(i.host)+':'+esc(i.port)+' · '+busy+' · 池 '+esc(i.pool||'shared')+'</div>'+
+   '<div class="instance-meta">PID '+esc(i.pid==null?'-':i.pid)+' · Max '+esc(i.max_version||'未知')+' · 连接 '+esc((i.transports||[]).join(', ')||'无')+'</div>'+
+   '<div class="instance-meta">租约 '+esc(i.lease_kind||'-')+(i.busy?' · 持有 '+esc(i.locked_for_seconds||0)+' 秒':'')+' · '+(i.pinned?'固定配置':'自动发现')+'</div>'+
+   (i.online_error?'<div class="instance-error">'+esc(i.online_error)+'</div>':'')+'</div>';
+ }
+ box.innerHTML=out;
+}
 let ALL=[],STATS=null,EXP={},limit=500,autoOn=true;
 async function load(){
  try{
@@ -517,7 +570,7 @@ function badge(st){const s=SS[st]||[st,'#2563eb'];return '<span class="badge" st
 function renderRes(j){const err=j.error||(j.result&&j.result.error);if(err)return'<div class="err">'+esc(err)+'</div>';if(j.result&&Object.keys(j.result).length){let r='';const shot=(typeof j.result==='object'&&j.result.viewport_name)?String(j.result.viewport_name).split(/[\\/]/).pop():'';if(shot)r+='<a href="/files/'+encodeURIComponent(shot)+'" target="_blank"><img src="/files/'+encodeURIComponent(shot)+'" alt="viewport" style="max-width:100%;max-height:360px;border:1px solid #334155;border-radius:8px;display:block;margin-bottom:8px"></a>';const t=typeof j.result==='string'?j.result:(j.result.message||JSON.stringify(j.result,null,2));return r+'<div class="ok">'+esc(t)+'</div>'}return'<div class="dim">（无结果）</div>'}
 function renderFiles(j){
  const L=[];
- const LABELS={output_file:'蒙皮结果',output_name:'文件名',viewport_file:'视口截图',viewport_name:'截图文件名'};
+ const LABELS={output_file:'蒙皮结果',viewport_file:'视口截图'};
  if(j.scene_local_path){const n=String(j.scene_local_path).split(/[\\/]/).pop();if(n)L.push('<li><a href="/files/'+encodeURIComponent(n)+'">场景文件 — '+esc(n)+'</a></li>')}
  const r=j.result||{};
  if(r&&typeof r==='object')for(const k of Object.keys(r)){
@@ -574,7 +627,8 @@ B('btnMore').onclick=()=>{limit+=500;load()};
 B('chkAuto').onchange=e=>{autoOn=e.target.checked};
 B('fStatus').onchange=B('fOwner').oninput=B('fKeyword').oninput=B('fPriority').onchange=B('fConfirm').onchange=()=>render();
 setInterval(()=>{if(autoOn&&document.hasFocus())load()},2e3);
-load();
+setInterval(()=>{if(autoOn&&document.hasFocus())loadInstances()},1e4);
+load();loadInstances();
 </script>
 </body>
 </html>"""
@@ -797,7 +851,7 @@ const SS={queued:['排队中','#2563eb'],running:['运行中','#3b82f6'],awaitin
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
 function dlLinks(j){
  const L=[];
- const LABELS={output_file:'蒙皮结果',output_name:'文件名',viewport_file:'视口截图',viewport_name:'截图文件名'};
+ const LABELS={output_file:'蒙皮结果',viewport_file:'视口截图'};
  if(j.scene_local_path){const n=String(j.scene_local_path).split(/[\\/]/).pop();if(n)L.push({label:'场景文件',name:n,url:'/files/'+encodeURIComponent(n)})}
  const r=j.result||{};
  if(r&&typeof r==='object')for(const k of Object.keys(r)){
