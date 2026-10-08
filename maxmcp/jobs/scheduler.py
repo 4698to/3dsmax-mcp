@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -750,6 +752,7 @@ class JobManager:
         self._store.set_result(job.job_id, result)
         job.add_log("scheduler", "debug 模式：仅入队模拟，未发送到 Max 实例", "warn")
         self._store.append_log(job.job_id, job.log[-1])
+        self._notify_job_completion_locked(job, JobStatus.SUCCEEDED)
         _log.info("job %s completed in debug mode (not dispatched)", job.job_id)
 
     def _queued_candidates_locked(self, now: float) -> list[Job]:
@@ -887,6 +890,58 @@ class JobManager:
         job.result = term_result
         self._store.set_status(job_id, status, at=now)
         self._store.set_result(job_id, term_result)
+        self._notify_job_completion_locked(job, status)
+
+    def _notify_job_completion_locked(self, job: Job, status: str) -> None:
+        parts = (job.user_id or "").split(":")
+        if len(parts) != 3 or parts[0] != "99U":
+            return
+        _, sender, receiver = parts
+        if not sender or not receiver:
+            return
+        if not os.environ.get("99U_PASSWORD"):
+            _log.warning("skip 99U completion notification for job %s: 99U_PASSWORD is unset", job.job_id)
+            return
+
+        labels = {
+            JobStatus.SUCCEEDED: "成功",
+            JobStatus.FAILED: "失败",
+            JobStatus.CANCELLED: "已取消",
+        }
+        message = f"GoSkin 任务{labels.get(status, status)}：{job.job_id}"
+        error = job.result.get("error")
+        if error:
+            message += f"\n原因：{error}"
+        threading.Thread(
+            target=self._send_99u_completion_notification,
+            args=(job.job_id, sender, receiver, message),
+            name=f"goskin-notify-{job.job_id[:8]}",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _send_99u_completion_notification(
+        job_id: str, sender: str, receiver: str, message: str
+    ) -> None:
+        script = Path(__file__).resolve().parents[2] / "scripts" / "99u_send.py"
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script), receiver, message, "--sender", sender],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if result.returncode:
+                _log.warning(
+                    "99U completion notification failed for job %s: %s",
+                    job_id,
+                    (result.stderr or result.stdout).strip(),
+                )
+            else:
+                _log.info("99U completion notification sent for job %s", job_id)
+        except Exception:
+            _log.exception("99U completion notification failed for job %s", job_id)
 
     def _release_worker_locked(self, job_id: str) -> None:
         worker = self._workers.pop(job_id, None)
