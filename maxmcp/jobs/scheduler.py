@@ -905,10 +905,20 @@ class JobManager:
         elif len(parts) == 4 and parts[0] == "bridge" and parts[2] == "ai-staff":
             _, receiver, _, sender = parts
         else:
+            if job.user_id:
+                self._log_entry(
+                    job.job_id,
+                    "notify_99u",
+                    f"未发送完成通知：user_id 格式不支持 ({job.user_id})",
+                    "warn",
+                )
             return
         if not sender or not receiver:
+            self._log_entry(job.job_id, "notify_99u", "未发送完成通知：发送账号或接收用户为空", "warn")
             return
         if not os.environ.get("99U_PASSWORD"):
+            note = "未发送完成通知：服务进程未配置环境变量 99U_PASSWORD"
+            self._log_entry(job.job_id, "notify_99u", note, "error")
             _log.warning("skip 99U completion notification for job %s: 99U_PASSWORD is unset", job.job_id)
             return
 
@@ -939,9 +949,8 @@ class JobManager:
             daemon=True,
         ).start()
 
-    @staticmethod
     def _send_99u_completion_notification(
-        job_id: str, sender: str, receiver: str, message: str
+        self, job_id: str, sender: str, receiver: str, message: str
     ) -> None:
         script = Path(__file__).resolve().parents[2] / "scripts" / "99u_send.py"
         try:
@@ -953,14 +962,23 @@ class JobManager:
                 check=False,
             )
             if result.returncode:
+                detail = (result.stderr or result.stdout).strip()
+                self._log_entry(
+                    job_id,
+                    "notify_99u",
+                    f"99U 完成通知发送失败：{detail or f'退出码 {result.returncode}'}",
+                    "error",
+                )
                 _log.warning(
                     "99U completion notification failed for job %s: %s",
                     job_id,
-                    (result.stderr or result.stdout).strip(),
+                    detail,
                 )
             else:
+                self._log_entry(job_id, "notify_99u", "99U 完成通知已发送")
                 _log.info("99U completion notification sent for job %s", job_id)
-        except Exception:
+        except Exception as exc:
+            self._log_entry(job_id, "notify_99u", f"99U 完成通知发送异常：{exc}", "error")
             _log.exception("99U completion notification failed for job %s", job_id)
 
     def _release_worker_locked(self, job_id: str) -> None:
