@@ -944,13 +944,18 @@ class JobManager:
             message += f"\n原因：{error}"
         threading.Thread(
             target=self._send_99u_completion_notification,
-            args=(job.job_id, sender, receiver, message),
+            args=(job.job_id, sender, receiver, message, output_file),
             name=f"goskin-notify-{job.job_id[:8]}",
             daemon=True,
         ).start()
 
     def _send_99u_completion_notification(
-        self, job_id: str, sender: str, receiver: str, message: str
+        self,
+        job_id: str,
+        sender: str,
+        receiver: str,
+        message: str,
+        output_file: str | None = None,
     ) -> None:
         script = Path(__file__).resolve().parents[2] / "scripts" / "99u_send.py"
         try:
@@ -974,9 +979,35 @@ class JobManager:
                     job_id,
                     detail,
                 )
-            else:
-                self._log_entry(job_id, "notify_99u", "99U 完成通知已发送")
-                _log.info("99U completion notification sent for job %s", job_id)
+                return
+
+            self._log_entry(job_id, "notify_99u", "99U 完成通知已发送")
+            _log.info("99U completion notification sent for job %s", job_id)
+
+            if output_file and Path(output_file).is_file():
+                file_result = subprocess.run(
+                    [sys.executable, str(script), receiver, "--file", output_file, "--sender", sender],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    check=False,
+                )
+                if file_result.returncode:
+                    detail = (file_result.stderr or file_result.stdout).strip()
+                    self._log_entry(
+                        job_id,
+                        "notify_99u",
+                        f"99U 结果文件发送失败：{detail or f'退出码 {file_result.returncode}'}",
+                        "error",
+                    )
+                    _log.warning(
+                        "99U result file notification failed for job %s: %s",
+                        job_id,
+                        detail,
+                    )
+                else:
+                    self._log_entry(job_id, "notify_99u", "99U 结果文件已发送")
+                    _log.info("99U result file sent for job %s", job_id)
         except Exception as exc:
             self._log_entry(job_id, "notify_99u", f"99U 完成通知发送异常：{exc}", "error")
             _log.exception("99U completion notification failed for job %s", job_id)
