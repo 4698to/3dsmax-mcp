@@ -167,6 +167,7 @@ def submit_goskin_job(
     preserve_scene: bool = False,
     debug: bool = False,
     user_id: Optional[str] = None,
+    max_influences: Optional[int] = None,
 ) -> str:
     """Submit a GoSkin auto-skinning job to the shared queue.
 
@@ -185,6 +186,8 @@ def submit_goskin_job(
             recorded into the job log and the ``user_id`` field for tracing,
             and does NOT affect ownership/authorization. When omitted, the
             request's ``X-Maxmcp-User-Id`` header is used as a fallback.
+        max_influences: Optional positive integer for the maximum bone
+            influences per vertex. When omitted, the server default applies.
         scene_local_path: Local absolute path of the .max scene on the 3ds Max
             machine (from workspace_upload / HTTP upload). null = current scene.
         instance: Optional instance name from list_instances to pin the job to
@@ -212,6 +215,7 @@ def submit_goskin_job(
             priority=priority,
             preserve_scene=preserve_scene,
             debug=debug,
+            max_influences=max_influences,
         )
     except Exception as exc:  # noqa: BLE001 统一映射为结构化错误
         return json.dumps(_error_payload(exc), ensure_ascii=False)
@@ -222,6 +226,11 @@ def submit_goskin_job(
             "queue_position": job.queue_position,
             "owner": job.owner,
             "user_id": job.user_id,
+            "max_influences": (
+                job.max_influences
+                if job.max_influences is not None
+                else job_manager.max_influences
+            ),
             "confirm_mode": job.confirm_mode,
             "debug": job.debug,
             "status_url": _job_status_url(job.job_id, job.view_token, _view_base(ctx=ctx)),
@@ -358,6 +367,7 @@ async def submit_job_http(request: Request) -> Response:
             priority=params.get("priority", "normal"),
             preserve_scene=bool(params.get("preserve_scene", False)),
             debug=bool(params.get("debug", False)),
+            max_influences=params.get("max_influences"),
         )
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(_error_payload(exc), status_code=400)
@@ -368,6 +378,11 @@ async def submit_job_http(request: Request) -> Response:
             "queue_position": job.queue_position,
             "owner": job.owner,
             "user_id": job.user_id,
+            "max_influences": (
+                job.max_influences
+                if job.max_influences is not None
+                else job_manager.max_influences
+            ),
             "confirm_mode": job.confirm_mode,
             "debug": job.debug,
             "status_url": _job_status_url(job.job_id, job.view_token, _view_base(request=request)),

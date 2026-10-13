@@ -31,6 +31,7 @@
 | `scene_local_path` | 否 | 上传后拿到的本地路径；**省略 = 用被分配实例的当前场景** |
 | `instance` | 否 | 钉到指定实例（必须是 `shared`/`jobs` 池；`interactive` 池会被拒 `INSTANCE_RESERVED`）。省略 = 服务端任选空闲 |
 | `mesh_names` / `bone_names` | 否 | 省略 = 自动解析场景里未隐藏的网格/骨骼 |
+| `max_influences` | 否 | 每顶点最大骨骼影响数；传入时作为该队列任务的设置（必须为正整数），省略时使用服务端 `MAXMCP_JOB_MAX_INFLUENCES` 默认值（默认 `4`）。 |
 | `confirm_mode` | 否 | `auto`（默认，服务端自动点「开始蒙皮」）或 `manual`（停在 `awaiting_confirm` 等人确认） |
 | `priority` | 否 | `high` / `normal`（默认）/ `low` |
 | `user_id` | 否（尽力而为） | **审计字段**（谁提交的）。**能拿到标识就带**：MCP 参数 `user_id`，或 HTTP 请求头 `X-Maxmcp-User-Id`（**二选一**；MCP 工具参数未传/为空时自动兜底读该请求头）。**拿不到（如 agent 环境无用户标识）就空着照常提交**——空串被归一为 null，靠 owner/session 兜底审计，不会导致任务失败。用 `McpHttpSession` 脚本提交时构造传 `audit_user_id=<用户标识>` 自动带该头。只记录到任务日志与 Job 的 `user_id` 字段，**不参与鉴权** |

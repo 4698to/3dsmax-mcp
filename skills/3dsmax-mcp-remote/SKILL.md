@@ -78,12 +78,13 @@ Path tips:
 
 ## GoSkin：自动蒙皮统一走 `submit_goskin_job`
 
-自动蒙皮**只能**用 `submit_goskin_job` 提交队列。不要自己选工具，不要先 `load_scene` 再写 `call('goskin_ensure_ready')`，也不要再用 `list_online_instances.py` 看 busy，更不要跑 `goskin_dev_flow.py`。一个工具入队：服务端自动排队 → 挑空闲实例（jobs/shared 池）→ 独占租约跑完整个 GoSkin 流程，Agent 只负责轮询终态。
+自动蒙皮**只能**用 `submit_goskin_job` 提交队列。用户指定每顶点最大骨骼影响数时，将 `max_influences` 随任务传给 `submit_goskin_job`；省略时使用服务端默认值。不要调用独立的 `goskin_set_max_influences`，也不要自己选其他蒙皮工具、先 `load_scene` 再写 `call('goskin_ensure_ready')`、用 `list_online_instances.py` 查 busy 或运行 `goskin_dev_flow.py`。一个工具入队：服务端自动排队 → 挑空闲实例（jobs/shared 池）→ 独占租约跑完整个 GoSkin 流程，Agent 只负责轮询终态。
 
 ```text
-workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user_id=<你的用户标识>)  →  轮询 get_goskin_job(job_id) 直到终态
+workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user_id=<你的用户标识>, max_influences=<用户指定值；可选>)  →  轮询 get_goskin_job(job_id) 直到终态
 ```
 
+- **最大骨骼影响数是队列任务配置的一部分**：提交前确认用户要求的每顶点最大骨骼影响数；用户指定时将 `max_influences` 传给 `submit_goskin_job`，未指定时省略并使用服务端默认值。不要用独立 `goskin_set_max_influences` 替代队列参数，因为它可能改到另一个 Max 实例。
 - **user_id 尽力而为（审计字段，不影响提交）**：`submit_goskin_job` **尽量**传 `user_id=<你的用户标识>`（HTTP 提交带 `X-Maxmcp-User-Id` 头），用于审计追踪提交者、不影响鉴权。**拿到标识就带，拿不到（如 `os.environ['CC_SESSION_KEY']` 为空）照常提交、不要中止**——空串被服务端归一为 null、靠 owner/session 兜底审计，不会导致任务失败。用 `McpHttpSession` 脚本提交的，构造时传 `audit_user_id=<你的用户标识>`，会随每个请求自动带 `X-Maxmcp-User-Id` 头，参数空时也能兜底记录。
 - `confirm_mode="auto"`（默认）提交后**全程自动、无需任何人确认**：**不要询问用户"是否开始蒙皮"**，直接展示 status_url 并轮询到终态；`manual` 停在 `awaiting_confirm` 时才需（征得用户同意后）`confirm_goskin_job` 放行。
 - `scene_local_path` 只传上传返回的 `local_path`，不要把 `url` 或文件名传进去。
@@ -97,7 +98,7 @@ workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user
 多人/批量提交自动蒙皮时**走队列，不要自己抢实例**：`submit_goskin_job` 提交后，服务端自动排队、挑空闲实例（jobs/shared 池）、独占租约跑完整个 GoSkin 流程，Agent 只负责轮询终态。
 
 ```text
-workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user_id=<你的用户标识>)  →  轮询 get_goskin_job(job_id)
+workspace_upload <本地.max>  →  submit_goskin_job(scene_local_path=..., user_id=<你的用户标识>, max_influences=<用户指定值；可选>)  →  轮询 get_goskin_job(job_id)
 ```
 
 - `confirm_mode="auto"`（默认）：提交后**全程自动，不要询问用户"是否开始蒙皮"**，直接展示 status_url 并轮询到 `succeeded`/`failed`。

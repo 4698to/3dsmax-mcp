@@ -105,6 +105,7 @@ class Job:
     cancel_requested: bool = False
     retries: int = 0
     queue_position: Optional[int] = None
+    max_influences: Optional[int] = None
 
     def add_log(self, step: str, note: str, level: str = "info") -> JobLogEntry:
         """追加日志并截断到尾部上限（全量由 JobStore 持久化）。"""
@@ -122,6 +123,7 @@ class Job:
             "job_id": self.job_id,
             "owner": self.owner,
             "user_id": self.user_id,
+            "max_influences": self.max_influences,
             "status": self.status,
             "instance": self.instance,
             "scene_local_path": self.scene_local_path,
@@ -148,6 +150,7 @@ class Job:
             job_id=str(raw["job_id"]),
             owner=str(raw.get("owner", "")),
             user_id=raw.get("user_id"),
+            max_influences=raw.get("max_influences"),
             status=str(raw.get("status", JobStatus.QUEUED)),
             instance=raw.get("instance"),
             scene_local_path=raw.get("scene_local_path"),

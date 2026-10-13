@@ -261,6 +261,10 @@ class JobManager:
         return self._auto_confirm
 
     @property
+    def max_influences(self) -> int:
+        return self._max_influences
+
+    @property
     def jobs_dir(self) -> Path:
         return self._store.jobs_dir
 
@@ -395,10 +399,17 @@ class JobManager:
         priority: str = "normal",
         preserve_scene: bool = False,
         debug: Optional[bool] = None,
+        max_influences: Optional[int] = None,
     ) -> Job:
         owner = owner or ""
         user_id = (user_id or "").strip() or None
         with self._lock:
+            if max_influences is not None and (
+                isinstance(max_influences, bool)
+                or not isinstance(max_influences, int)
+                or max_influences <= 0
+            ):
+                raise ValueError("max_influences 必须是正整数")
             if priority not in VALID_PRIORITIES:
                 raise ValueError(f"priority 必须是 {VALID_PRIORITIES} 之一，收到 {priority!r}")
             if confirm_mode is None:
@@ -441,6 +452,7 @@ class JobManager:
                 view_token=new_view_token(),
                 debug=debug if debug is not None else self._debug_mode,
                 user_id=user_id,
+                max_influences=max_influences,
             )
             if user_id:
                 job.add_log("submit", f"提交者 user_id={user_id}")
@@ -800,7 +812,11 @@ class JobManager:
                 ocr_base=self._ocr_base,
                 run_timeout_s=self._run_timeout_s,
                 complete_timeout_s=self._complete_timeout_s,
-                max_influences=self._max_influences,
+                max_influences=(
+                    job.max_influences
+                    if job.max_influences is not None
+                    else self._max_influences
+                ),
                 output_dir=self._output_dir,
                 callback=lambda step, note, level="info": self._log_entry(
                     job_id, step, note, level
