@@ -344,6 +344,17 @@ def _configure_max_influences(
     if not saved.get("ok"):
         return {"ok": False, "error": saved.get("error")}
     time.sleep(0.3)
+    confirmed = click_dialog_button(
+        "确定",
+        title_pattern="保存配置",
+        vendor_pattern="*",
+        require_vendor=False,
+        ocr_base=ocr_base,
+        client=client,
+    )
+    if not confirmed.get("ok"):
+        return {"ok": False, "error": confirmed.get("error")}
+    time.sleep(0.3)
 
     skin_tab = click_dialog_button(
         "蒙皮",
