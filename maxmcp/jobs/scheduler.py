@@ -45,6 +45,7 @@ from ..workspace_config import (
 )
 from .executor_goskin import (
     DEFAULT_COMPLETE_TIMEOUT_S,
+    DEFAULT_MAX_INFLUENCES,
     confirm_goskin_job_step,
     run_goskin_job,
 )
@@ -164,6 +165,7 @@ class JobManager:
         admin_ids: Optional[list[str]] = None,
         ocr_base: Optional[str] = None,
         complete_timeout_s: Optional[float] = None,
+        max_influences: Optional[int] = None,
         output_dir: Optional[str] = None,
         debug_mode: Optional[bool] = None,
     ):
@@ -226,6 +228,11 @@ class JobManager:
         self._ocr_base = get_ocr_base() if ocr_base is None else ocr_base
         self._complete_timeout_s = float(
             DEFAULT_COMPLETE_TIMEOUT_S if complete_timeout_s is None else complete_timeout_s
+        )
+        self._max_influences = int(
+            _env_int("MAXMCP_JOB_MAX_INFLUENCES", DEFAULT_MAX_INFLUENCES)
+            if max_influences is None
+            else max_influences
         )
         # 蒙皮产物保存目录：MAXMCP_JOB_OUTPUT_DIR 或共享 workspace（/files/ 可下载）。
         if output_dir is None:
@@ -793,6 +800,7 @@ class JobManager:
                 ocr_base=self._ocr_base,
                 run_timeout_s=self._run_timeout_s,
                 complete_timeout_s=self._complete_timeout_s,
+                max_influences=self._max_influences,
                 output_dir=self._output_dir,
                 callback=lambda step, note, level="info": self._log_entry(
                     job_id, step, note, level

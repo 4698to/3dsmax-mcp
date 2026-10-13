@@ -38,7 +38,13 @@ from dialog_monitor.goskin_flow import (  # noqa: E402
     run_goskin_skin,
 )
 from dialog_monitor.click_button import (  # noqa: E402
+    box_center,
+    click_at_screen,
+    click_dialog_button,
+    find_matching_line,
+    image_to_screen,
     max_window_state,
+    recognize_dialog,
     restore_max_window,
 )
 
@@ -263,6 +269,101 @@ def _propose_skin_bones(
 
 #: 默认单步 OCR 等待上限（§7.4，随任务参数可覆盖；v1 Job 模型未带该字段）。
 DEFAULT_COMPLETE_TIMEOUT_S = 300.0
+DEFAULT_MAX_INFLUENCES = 4
+
+
+def _configure_max_influences(
+    client: Any,
+    value: int,
+    *,
+    ocr_base: str,
+) -> dict[str, Any]:
+    """Set GoSkin's 配置/自定义配置/最大影响 value before skinning."""
+    for tab in ("配置", "自定义配置"):
+        clicked = click_dialog_button(
+            tab,
+            title_pattern=TITLE_PATTERN,
+            vendor_pattern=VENDOR_PATTERN,
+            ocr_base=ocr_base,
+            client=client,
+        )
+        if not clicked.get("ok"):
+            return {"ok": False, "error": clicked.get("error")}
+        time.sleep(0.3)
+
+    recognized = recognize_dialog(
+        title_pattern=TITLE_PATTERN,
+        vendor_pattern=VENDOR_PATTERN,
+        ocr_base=ocr_base,
+        client=client,
+    )
+    if not recognized.get("ok"):
+        return {"ok": False, "error": recognized.get("error")}
+    target = find_matching_line(recognized.get("ocr_lines") or [], "最大影响")
+    if target is None:
+        return {"ok": False, "error": "OCR 未找到 GoSkin 配置项‘最大影响’"}
+    box = target.get("box") or []
+    points = [p for p in box if isinstance(p, (list, tuple)) and len(p) >= 2]
+    if not points:
+        return {"ok": False, "error": "最大影响 OCR 区域无有效坐标"}
+    capture = recognized["capture"]
+    xs = [float(p[0]) for p in points]
+    field_x = (
+        (min(xs) + max(xs)) / 2
+        if max(xs) - min(xs) > int(capture["image_width"]) * 0.4
+        else max(xs) + int(capture["image_width"]) * 0.14
+    )
+    field_y = sum(float(p[1]) for p in points) / len(points)
+    sx, sy = image_to_screen(
+        field_x,
+        field_y,
+        screen_rect=capture["screen_rect"],
+        image_width=int(capture["image_width"]),
+        image_height=int(capture["image_height"]),
+        client_rect=capture.get("client_rect"),
+    )
+    clicked = click_at_screen(sx, sy, hwnd=int(capture.get("hwnd") or 0), client=client)
+    if not clicked.get("ok"):
+        return {"ok": False, "error": clicked.get("error")}
+    escaped = str(int(value)).replace('"', '\\"')
+    typed = _exec_ms(
+        client,
+        '(try ((dotNetClass "System.Windows.Forms.SendKeys").SendWait "^a"; '
+        f'((dotNetClass "System.Windows.Forms.SendKeys").SendWait "{escaped}"); "OK") '
+        'catch ("ERROR"))',
+    ).strip()
+    if typed != "OK":
+        return {"ok": False, "error": f"设置最大影响失败: {typed}"}
+    saved = click_dialog_button(
+        "保存",
+        title_pattern=TITLE_PATTERN,
+        vendor_pattern=VENDOR_PATTERN,
+        ocr_base=ocr_base,
+        client=client,
+    )
+    if not saved.get("ok"):
+        return {"ok": False, "error": saved.get("error")}
+    time.sleep(0.3)
+
+    skin_tab = click_dialog_button(
+        "蒙皮",
+        title_pattern=TITLE_PATTERN,
+        vendor_pattern=VENDOR_PATTERN,
+        ocr_base=ocr_base,
+        client=client,
+    )
+    if not skin_tab.get("ok"):
+        return {"ok": False, "error": skin_tab.get("error")}
+    time.sleep(0.3)
+    ready = ensure_goskin_ready(
+        client,
+        title_pattern=TITLE_PATTERN,
+        vendor_pattern=VENDOR_PATTERN,
+        ocr_base=ocr_base,
+    )
+    if not ready.get("ok"):
+        return {"ok": False, "error": ready.get("error")}
+    return {"ok": True, "value": int(value)}
 
 
 def run_goskin_job(
@@ -272,6 +373,7 @@ def run_goskin_job(
     ocr_base: str,
     run_timeout_s: float = 1800.0,
     complete_timeout_s: float = DEFAULT_COMPLETE_TIMEOUT_S,
+    max_influences: int = DEFAULT_MAX_INFLUENCES,
     output_dir: Optional[str] = None,
     callback: Optional[Callable[[str, str, str], None]] = None,
     is_cancelled: Optional[Callable[[], bool]] = None,
@@ -285,6 +387,7 @@ def run_goskin_job(
         ocr_base: OCR 服务地址（由 scheduler 从配置解析）。
         run_timeout_s: 任务整体超时（§7.4 MAXMCP_JOB_RUN_TIMEOUT），<=0 不限。
         complete_timeout_s: 单步 OCR 等待上限（「开始蒙皮」等「完成」）。
+        max_influences: GoSkin 自定义配置中的最大影响数。
         output_dir: 蒙皮完成后场景另存为的目录（通常为共享 workspace，
             /files/ 可直接下载）；为 None 时跳过保存。
         callback: 步骤日志回调 callback(step, note, level)；scheduler 写入
@@ -404,6 +507,21 @@ def run_goskin_job(
             "error": ensured.get("error"),
         }
     log("ensure_ready", "GoSkin 就绪")
+
+    configured = _configure_max_influences(
+        client,
+        max_influences,
+        ocr_base=ocr_base,
+    )
+    if not configured.get("ok"):
+        log("configure_max_influences", f"设置最大影响数失败: {configured.get('error')}", "error")
+        return {
+            "ok": False,
+            "status": JobStatus.FAILED,
+            "code": "configure_max_influences",
+            "error": configured.get("error"),
+        }
+    log("configure_max_influences", f"最大影响数已设置为 {max_influences}")
 
     # 5. 选网格/骨骼，停在「开始蒙皮」前（§7.1 步骤 4）
     aborted = _abort("run_skin")

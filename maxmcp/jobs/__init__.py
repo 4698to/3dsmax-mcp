@@ -4,7 +4,12 @@
 聚合导出 Job 模型 / JSONL 存储 / GoSkin 执行器 / JobManager 调度器。
 """
 
-from .executor_goskin import DEFAULT_COMPLETE_TIMEOUT_S, confirm_goskin_job_step, run_goskin_job
+from .executor_goskin import (
+    DEFAULT_COMPLETE_TIMEOUT_S,
+    DEFAULT_MAX_INFLUENCES,
+    confirm_goskin_job_step,
+    run_goskin_job,
+)
 from .job_model import (
     MAX_LOG_TAIL,
     TERMINAL_STATUSES,
@@ -30,6 +35,7 @@ from .scheduler import (
 
 __all__ = [
     "DEFAULT_COMPLETE_TIMEOUT_S",
+    "DEFAULT_MAX_INFLUENCES",
     "DEFAULT_RETENTION_SECONDS",
     "MAX_LOG_TAIL",
     "TERMINAL_STATUSES",
