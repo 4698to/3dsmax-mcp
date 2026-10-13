@@ -39,6 +39,17 @@ def _ocr_base(override: str = "") -> str:
     return get_ocr_base()
 
 
+@mcp.tool()
+def goskin_set_max_influences(
+    value: int,
+    ocr_base: str = "",
+) -> dict[str, Any]:
+    """Set and save GoSkin's custom 最大影响数 value without starting skinning."""
+    from ..jobs.executor_goskin import _configure_max_influences
+
+    return _configure_max_influences(client, int(value), ocr_base=_ocr_base(ocr_base))
+
+
 def _strip_ocr_lines(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: _strip_ocr_lines(v) for k, v in obj.items() if k != "ocr_lines"}

@@ -356,6 +356,18 @@ def _configure_max_influences(
         return {"ok": False, "error": confirmed.get("error")}
     time.sleep(0.3)
 
+    return {"ok": True, "value": int(value)}
+
+
+def _configure_max_influences_and_ready(
+    client: Any,
+    value: int,
+    *,
+    ocr_base: str,
+) -> dict[str, Any]:
+    configured = _configure_max_influences(client, value, ocr_base=ocr_base)
+    if not configured.get("ok"):
+        return configured
     skin_tab = click_dialog_button(
         "蒙皮",
         title_pattern=TITLE_PATTERN,
@@ -374,7 +386,7 @@ def _configure_max_influences(
     )
     if not ready.get("ok"):
         return {"ok": False, "error": ready.get("error")}
-    return {"ok": True, "value": int(value)}
+    return configured
 
 
 def run_goskin_job(
@@ -519,7 +531,7 @@ def run_goskin_job(
         }
     log("ensure_ready", "GoSkin 就绪")
 
-    configured = _configure_max_influences(
+    configured = _configure_max_influences_and_ready(
         client,
         max_influences,
         ocr_base=ocr_base,

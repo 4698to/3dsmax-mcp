@@ -226,6 +226,7 @@ _AUDIT_EXTRA = {
     "goskin_confirm_start",
     "goskin_run_skin",
     "goskin_run_auto",
+    "goskin_set_max_influences",
     "click_plugin_dialog_button",
     "click_plugin_menu_path",
     "restore_max_window",
